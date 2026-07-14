@@ -76,6 +76,13 @@ function mergeSeriesChange(series, changes) {
   };
 }
 
+function isStartedOccurrence(workout) {
+  return Boolean(workout?.startedAt) || (workout?.exercises ?? []).some((exercise) => (
+    Number(exercise.completedSets) > 0
+    || exercise.setResults?.some((result) => result.status !== 'pending')
+  ));
+}
+
 /**
  * Splits a series at an occurrence and rematerializes only planned instances.
  * Completed/skipped instances are returned byte-for-byte unchanged.
@@ -104,17 +111,30 @@ export function splitSeriesAndFollowing(
   const affectedPlanned = workouts.filter((workout) => (
     workout.seriesId === series.id
     && workout.status === 'planned'
+    && !isStartedOccurrence(workout)
     && compareCalendarDates(workout.occurrenceDate, occurrenceDate) >= 0
   ));
   const affectedIds = new Set(affectedPlanned.map((workout) => workout.id));
-  const preserved = workouts.filter((workout) => !affectedIds.has(workout.id));
-  const terminalDates = preserved
+  const protectedPlannedIds = new Set(workouts
     .filter((workout) => (
       workout.seriesId === series.id
-      && workout.status !== 'planned'
+      && workout.status === 'planned'
+      && isStartedOccurrence(workout)
+      && compareCalendarDates(workout.occurrenceDate, occurrenceDate) >= 0
+    ))
+    .map((workout) => workout.id));
+  const terminalDates = workouts
+    .filter((workout) => (
+      workout.seriesId === series.id
+      && (workout.status !== 'planned' || isStartedOccurrence(workout))
       && compareCalendarDates(workout.occurrenceDate, occurrenceDate) >= 0
     ))
     .map((workout) => workout.occurrenceDate);
+  const preserved = workouts
+    .filter((workout) => !affectedIds.has(workout.id))
+    .map((workout) => protectedPlannedIds.has(workout.id)
+      ? { ...workout, seriesId: null }
+      : workout);
 
   const previousEnd = addCalendarDays(occurrenceDate, -1);
   const oldSeries = compareCalendarDates(previousEnd, series.startsOn) >= 0
@@ -191,11 +211,21 @@ export function deleteSeriesAndFollowing(inputSeries, workouts, occurrenceDate) 
     series: compareCalendarDates(previousEnd, series.startsOn) >= 0
       ? { ...series, endsOn: previousEnd }
       : null,
-    workouts: workouts.filter((workout) => !(
-      workout.seriesId === series.id
-      && workout.status === 'planned'
-      && compareCalendarDates(workout.occurrenceDate, occurrenceDate) >= 0
-    )),
+    workouts: workouts
+      .filter((workout) => !(
+        workout.seriesId === series.id
+        && workout.status === 'planned'
+        && !isStartedOccurrence(workout)
+        && compareCalendarDates(workout.occurrenceDate, occurrenceDate) >= 0
+      ))
+      .map((workout) => (
+        workout.seriesId === series.id
+        && workout.status === 'planned'
+        && isStartedOccurrence(workout)
+        && compareCalendarDates(workout.occurrenceDate, occurrenceDate) >= 0
+          ? { ...workout, seriesId: null }
+          : workout
+      )),
   };
 }
 

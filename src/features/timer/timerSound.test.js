@@ -37,7 +37,7 @@ function createFakeAudioContext() {
 }
 
 describe('timer sound player', () => {
-  it('unlocks once and generates a local two-tone completion signal', async () => {
+  it('unlocks once and generates a five-second repeated completion signal', async () => {
     const { context, gains, oscillators } = createFakeAudioContext();
     const createAudioContext = vi.fn(() => context);
     const player = createTimerSoundPlayer({ createAudioContext });
@@ -47,12 +47,15 @@ describe('timer sound player', () => {
 
     expect(createAudioContext).toHaveBeenCalledOnce();
     expect(context.resume).toHaveBeenCalledOnce();
-    expect(oscillators).toHaveLength(2);
-    expect(gains).toHaveLength(2);
+    expect(oscillators).toHaveLength(10);
+    expect(gains).toHaveLength(10);
     oscillators.forEach((oscillator) => {
       expect(oscillator.start).toHaveBeenCalledOnce();
       expect(oscillator.stop).toHaveBeenCalledOnce();
     });
+    const firstStart = Math.min(...oscillators.map((oscillator) => oscillator.start.mock.calls[0][0]));
+    const lastStop = Math.max(...oscillators.map((oscillator) => oscillator.stop.mock.calls[0][0]));
+    expect(lastStop - firstStart).toBeGreaterThanOrEqual(5);
   });
 
   it('degrades silently when Web Audio is unavailable', async () => {

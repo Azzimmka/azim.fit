@@ -4,8 +4,17 @@ import '@testing-library/jest-dom/vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CalendarDays } from 'lucide-react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { prepareTimerSound } from '../../features/timer/timerSound.js';
 import { ConfirmScopeDialog, EmptyState, Modal, RestTimer, Toast } from '../index.js';
+
+vi.mock('../../features/timer/timerSound.js', () => ({
+  prepareTimerSound: vi.fn(),
+}));
+
+beforeEach(() => {
+  vi.mocked(prepareTimerSound).mockReset();
+});
 
 describe('Modal', () => {
   it('traps focus, closes on Escape and restores the opener focus', async () => {
@@ -116,6 +125,7 @@ describe('RestTimer', () => {
     expect(onPause).toHaveBeenCalledOnce();
     expect(onAddThirty).toHaveBeenCalledOnce();
     expect(onCancel).toHaveBeenCalledOnce();
+    expect(prepareTimerSound).toHaveBeenCalledOnce();
   });
 
   it('shows Resume while paused', async () => {
@@ -126,6 +136,7 @@ describe('RestTimer', () => {
     expect(screen.getByText('На паузе')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Продолжить таймер' }));
     expect(onResume).toHaveBeenCalledOnce();
+    expect(prepareTimerSound).toHaveBeenCalledOnce();
   });
 });
 

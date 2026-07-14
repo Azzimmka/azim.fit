@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useReducer, useState } from 'react';
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { ArrowLeft, CalendarDays } from 'lucide-react';
 import {
   Link,
@@ -6,6 +6,7 @@ import {
   Route,
   Routes,
   useLocation,
+  useNavigate,
   useParams,
   useSearchParams,
 } from 'react-router-dom';
@@ -16,6 +17,7 @@ import {
   createEmptyAppState,
   createTemplateFromWorkout,
   differenceInCalendarDays,
+  findNewPersonalRecords,
   formatRuCount,
   getIsoWeekday,
   getTimerSnapshot,
@@ -34,6 +36,7 @@ import { AppLayout, PageHeader } from './features/layout/AppLayout.jsx';
 import { PlanPage } from './features/plan/PlanPage.jsx';
 import { ProgressPage } from './features/progress/ProgressPage.jsx';
 import { SettingsPage } from './features/settings/SettingsPage.jsx';
+import { ActiveWorkoutPage } from './features/session/index.js';
 import { TodayPage } from './features/today/TodayPage.jsx';
 import { prepareTimerSound } from './features/timer/timerSound.js';
 import { useTimerCompletionSound } from './features/timer/useTimerCompletionSound.js';
@@ -43,6 +46,7 @@ import { PwaInstallPrompt, PwaUpdatePrompt, requestPersistentStorage } from './p
 import { NotificationPermissionButton, useReminderScheduler } from './reminders/index.js';
 import {
   ActionTypes,
+  STORAGE_KEY_V2,
   appReducer,
   createDeletionSnapshot,
   loadAppStateResult,
@@ -258,8 +262,57 @@ function WorkoutRoute({ state, today, points, workoutActions }) {
   );
 }
 
+function WorkoutSessionRoute({
+  state,
+  today,
+  timerSnapshot,
+  sessionActions,
+}) {
+  const { id } = useParams();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const workout = selectWorkoutById(state, id);
+  const personalRecords = useMemo(() => {
+    if (!workout) return [];
+    const candidate = {
+      ...workout,
+      status: 'completed',
+      completedAt: workout.startedAt ?? `${today}T23:59:59.999`,
+    };
+    return findNewPersonalRecords(
+      candidate,
+      state.workouts.filter((item) => item.id !== candidate.id),
+    );
+  }, [state.workouts, today, workout]);
+  const requestedReturnTo = location.state?.returnTo;
+  const returnTo = typeof requestedReturnTo === 'string'
+    && requestedReturnTo.startsWith('/')
+    && !requestedReturnTo.includes('/session')
+    ? requestedReturnTo
+    : `/workouts/${id}`;
+
+  if (!workout || workout.status !== 'planned' || workout.plannedDate > today) {
+    return <Navigate to={`/workouts/${id}`} replace />;
+  }
+
+  return (
+    <ActiveWorkoutPage
+      workout={workout}
+      workouts={state.workouts}
+      today={today}
+      timerSnapshot={timerSnapshot}
+      personalRecords={personalRecords}
+      onBack={() => navigate(returnTo, { replace: true })}
+      {...sessionActions}
+    />
+  );
+}
+
 export default function App() {
   const today = useCurrentCalendarDate();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const sessionRouteActive = /^\/workouts\/[^/]+\/session\/?$/.test(location.pathname);
   const [loadResult] = useState(() => loadAppStateResult(globalThis.localStorage, { today }));
   const [state, dispatch] = useReducer(appReducer, loadResult.state);
   const [editor, setEditor] = useState(null);
@@ -272,6 +325,11 @@ export default function App() {
   });
   const [storageStatus, setStorageStatus] = useState('unknown');
   const [, setTimerClock] = useState(() => Date.now());
+  const stateRef = useRef(state);
+
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
 
   const stats = useMemo(() => selectProgressStats(state, today), [state, today]);
   const todayWorkouts = useMemo(() => selectWorkoutsForDate(state, today), [state, today]);
@@ -301,6 +359,18 @@ export default function App() {
   }, [state, today]);
 
   useEffect(() => {
+    const handleStorage = (event) => {
+      if (event.key !== STORAGE_KEY_V2 || event.storageArea !== globalThis.localStorage) return;
+      const nextState = loadAppStateResult(globalThis.localStorage, { today }).state;
+      if (JSON.stringify(nextState) === JSON.stringify(stateRef.current)) return;
+      dispatch({ type: ActionTypes.REPLACE_STATE, payload: { state: nextState } });
+    };
+
+    window.addEventListener('storage', handleStorage);
+    return () => window.removeEventListener('storage', handleStorage);
+  }, [today]);
+
+  useEffect(() => {
     if (!undo) return undefined;
     const delay = Math.max(0, new Date(undo.snapshot.expiresAt).getTime() - Date.now());
     const timeoutId = window.setTimeout(() => setUndo(null), delay);
@@ -311,6 +381,21 @@ export default function App() {
     if (!state.activeTimer || state.activeTimer.status !== 'running') return undefined;
     const intervalId = window.setInterval(() => setTimerClock(Date.now()), 500);
     return () => window.clearInterval(intervalId);
+  }, [state.activeTimer]);
+
+  useEffect(() => {
+    if (!state.activeTimer) return undefined;
+    const refreshTimer = () => setTimerClock(Date.now());
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') refreshTimer();
+    };
+
+    document.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('pageshow', refreshTimer);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('pageshow', refreshTimer);
+    };
   }, [state.activeTimer]);
 
   const markReminderDelivered = useCallback((key) => {
@@ -462,28 +547,37 @@ export default function App() {
     setScopeRequest(null);
   };
 
-  const updateResultDraft = (workoutId, exerciseId, field, value) => {
+  const updateResultDraft = (workoutId, exerciseId, setIndex, field, value) => {
     const parsed = value === '' ? null : Number(value);
     dispatch({
       type: ActionTypes.WORKOUT_UPDATE_RESULT,
-      payload: { workoutId, result: { exercises: [{ id: exerciseId, [field]: parsed }] } },
+      payload: {
+        workoutId,
+        result: { exercises: [{ id: exerciseId, setIndex, [field]: parsed }] },
+      },
     });
   };
 
-  const completeWorkout = (workout) => {
+  const completeWorkout = (workout, options = {}) => {
     const action = {
       type: ActionTypes.WORKOUT_COMPLETE,
       payload: {
         workoutId: workout.id,
+        requireResolvedSets: options.requireResolvedSets === true,
         result: {
           completedAt: new Date().toISOString(),
           resultNotes: workout.resultNotes,
           exercises: workout.exercises,
+          requireResolvedSets: options.requireResolvedSets === true,
         },
       },
     };
     const nextState = appReducer(state, action);
     const nextWorkout = selectWorkoutById(nextState, workout.id);
+    if (nextWorkout?.status !== 'completed') {
+      setNotice({ variant: 'info', title: 'Тренировка ещё не готова', message: 'Выполни или пропусти оставшиеся подходы.' });
+      return false;
+    }
     const beforeRecords = new Map(calculatePersonalRecords(state.workouts).map((item) => [item.normalizedName, item]));
     const record = calculatePersonalRecords(nextState.workouts).find((item) => {
       const previous = beforeRecords.get(item.normalizedName);
@@ -496,9 +590,18 @@ export default function App() {
     setNotice(record
       ? { variant: 'success', title: 'Новый личный рекорд!', message: record.displayName }
       : { variant: 'success', title: 'Тренировка завершена', message: `+${formatRuCount(nextWorkout?.pointsAwarded ?? 0, 'point')}` });
+    return true;
   };
 
   const workoutActions = {
+    onOpen: (workout) => {
+      const destination = workout.status === 'planned' && workout.plannedDate <= today
+        ? `/workouts/${workout.id}/session`
+        : `/workouts/${workout.id}`;
+      navigate(destination, {
+        state: { returnTo: `${location.pathname}${location.search}` },
+      });
+    },
     onToggleSet: (workoutId, exerciseId, index) => dispatch({ type: ActionTypes.WORKOUT_TOGGLE_SET, payload: { workoutId, exerciseId, index } }),
     onComplete: completeWorkout,
     onEdit: (workout) => setEditor({ mode: 'edit', workout, initialDate: workout.plannedDate }),
@@ -546,21 +649,63 @@ export default function App() {
 
   const timerSnapshot = getTimerSnapshot(state.activeTimer);
   useTimerCompletionSound(timerSnapshot);
+  useEffect(() => {
+    if (!timerSnapshot.expired) return;
+    dispatch({ type: ActionTypes.TIMER_FINISH });
+  }, [timerSnapshot.endsAt, timerSnapshot.expired]);
   const timerWorkout = state.workouts.find((workout) => workout.id === timerSnapshot.workoutId);
   const timerExercise = timerWorkout?.exercises.find((exercise) => exercise.id === timerSnapshot.exerciseId);
   const notificationControl = (
     <NotificationPermissionButton className="notification-permission" />
   );
+  const sessionActions = {
+    onStart: (workoutId) => dispatch({
+      type: ActionTypes.WORKOUT_SESSION_START,
+      payload: { workoutId, now: new Date().toISOString() },
+    }),
+    onCompleteSet: (payload) => {
+      void prepareTimerSound();
+      dispatch({
+        type: ActionTypes.WORKOUT_SESSION_COMPLETE_SET,
+        payload: { ...payload, now: new Date().toISOString() },
+      });
+    },
+    onUpdateSet: (payload) => dispatch({
+      type: ActionTypes.WORKOUT_SESSION_UPDATE_SET,
+      payload,
+    }),
+    onSkipExercise: (payload) => dispatch({
+      type: ActionTypes.WORKOUT_SESSION_SKIP_EXERCISE,
+      payload,
+    }),
+    onCompleteWorkout: (workout) => {
+      if (completeWorkout(workout, { requireResolvedSets: true })) {
+        navigate(`/workouts/${workout.id}`, { replace: true });
+      }
+    },
+    onUpdateNotes: (workoutId, resultNotes) => dispatch({
+      type: ActionTypes.WORKOUT_UPDATE_RESULT,
+      payload: { workoutId, result: { resultNotes } },
+    }),
+    onTimerPause: () => dispatch({ type: ActionTypes.TIMER_PAUSE }),
+    onTimerResume: () => dispatch({ type: ActionTypes.TIMER_RESUME }),
+    onTimerAddThirty: () => dispatch({
+      type: ActionTypes.TIMER_ADD_SECONDS,
+      payload: { seconds: 30 },
+    }),
+    onSkipRest: () => dispatch({ type: ActionTypes.TIMER_FINISH }),
+  };
 
   return (
     <AppLayout
+      immersive={sessionRouteActive}
       points={stats.totalPoints}
       level={stats.level}
       levelProgress={stats.levelProgress}
       remainingPoints={remainingPoints}
       missedCount={stats.missedWorkouts}
     >
-      <FocusPageHeading />
+      {!sessionRouteActive && <FocusPageHeading />}
       <Routes>
         <Route path="/" element={<Navigate to="/today" replace />} />
         <Route
@@ -635,11 +780,22 @@ export default function App() {
             />
           )}
         />
+        <Route
+          path="/workouts/:id/session"
+          element={(
+            <WorkoutSessionRoute
+              state={state}
+              today={today}
+              timerSnapshot={timerSnapshot}
+              sessionActions={sessionActions}
+            />
+          )}
+        />
         <Route path="/workouts/:id" element={<WorkoutRoute state={state} today={today} points={stats.totalPoints} workoutActions={workoutActions} />} />
         <Route path="*" element={<Navigate to="/today" replace />} />
       </Routes>
 
-      {state.activeTimer && (
+      {state.activeTimer && !sessionRouteActive && (
         <RestTimer
           remainingSeconds={timerSnapshot.remainingSeconds}
           status={timerSnapshot.status}
@@ -686,8 +842,8 @@ export default function App() {
         />
       )}
       {!undo && notice && <Toast {...notice} onDismiss={() => setNotice(null)} />}
-      <PwaInstallPrompt />
-      <PwaUpdatePrompt />
+      {!sessionRouteActive && <PwaInstallPrompt />}
+      {!sessionRouteActive && <PwaUpdatePrompt />}
     </AppLayout>
   );
 }

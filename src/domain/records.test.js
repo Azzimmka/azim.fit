@@ -82,5 +82,41 @@ describe('personal records', () => {
     expect(calculatePersonalRecords([base, corrected])[0].weight.value).toBe(90);
     expect(calculatePersonalRecords([base])[0].weight.value).toBe(90);
   });
-});
 
+  it('uses individual completed sets for max weight, summed volume, and reps', () => {
+    const workout = completedWorkout({
+      id: 'per-set',
+      completedAt: '2026-07-12T10:00:00.000Z',
+      exercises: [
+        {
+          id: 'press',
+          name: 'Жим',
+          sets: 3,
+          setResults: [
+            { status: 'completed', weightKg: 70, reps: 10, rpe: 10 },
+            { status: 'completed', weightKg: 80, reps: 8, rpe: 1 },
+            { status: 'skipped', weightKg: 100, reps: 20 },
+          ],
+        },
+        {
+          id: 'pushups',
+          name: 'Отжимания',
+          sets: 3,
+          setResults: [
+            { status: 'completed', reps: 20 },
+            { status: 'completed', reps: 25 },
+            { status: 'pending', reps: 99 },
+          ],
+        },
+      ],
+    });
+
+    const records = calculatePersonalRecords([workout]);
+    const press = records.find((record) => record.normalizedName === 'жим');
+    const pushups = records.find((record) => record.normalizedName === 'отжимания');
+    expect(press.weight.value).toBe(80);
+    expect(press.volume.value).toBe(1_340);
+    expect(press.reps).toBeNull();
+    expect(pushups.reps.value).toBe(25);
+  });
+});

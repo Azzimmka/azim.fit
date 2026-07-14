@@ -1,7 +1,11 @@
-const TIMER_TONES = Object.freeze([
+const CHIME_TONES = Object.freeze([
   { frequency: 784, offset: 0, duration: 0.16 },
   { frequency: 1046.5, offset: 0.13, duration: 0.22 },
 ]);
+const CHIME_OFFSETS = Object.freeze([0, 1.2, 2.4, 3.6, 4.8]);
+const TIMER_TONES = Object.freeze(CHIME_OFFSETS.flatMap((chimeOffset) => (
+  CHIME_TONES.map((tone) => ({ ...tone, offset: chimeOffset + tone.offset }))
+)));
 
 function createBrowserAudioContext() {
   const AudioContextConstructor = globalThis.AudioContext ?? globalThis.webkitAudioContext;

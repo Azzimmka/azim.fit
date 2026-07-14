@@ -17,19 +17,24 @@ import {
 import { updateTemplate } from '../domain/templates.js';
 import {
   addRestTimerSeconds,
+  normalizeActiveTimerForWorkouts,
   pauseRestTimer,
   resumeRestTimer,
   startRestTimer,
 } from '../domain/timer.js';
 import {
   applyTemplate,
+  completeWorkoutSet,
   completeNextWorkoutSet,
   completeWorkout,
   correctWorkoutResult,
   duplicateWorkout,
   rescheduleWorkout,
+  skipRemainingExerciseSets,
   skipWorkout,
+  startWorkoutSession,
   toggleWorkoutSet,
+  updateWorkoutSetResult,
   updateWorkoutResultDraft,
   updatePlannedWorkout,
 } from '../domain/workouts.js';
@@ -63,11 +68,20 @@ export const ActionTypes = Object.freeze({
   REMINDER_MARK_DELIVERED: 'reminder/mark-delivered',
   REMINDER_PRUNE: 'reminder/prune',
   WORKOUT_START_REST: 'workout/start-rest',
+  WORKOUT_SESSION_START: 'workout/session-start',
+  WORKOUT_START_SESSION: 'workout/session-start',
+  WORKOUT_SESSION_UPDATE_SET: 'workout/session-update-set',
+  WORKOUT_UPDATE_SET: 'workout/session-update-set',
+  WORKOUT_SESSION_COMPLETE_SET: 'workout/session-complete-set',
+  WORKOUT_COMPLETE_SET: 'workout/session-complete-set',
+  WORKOUT_SESSION_SKIP_EXERCISE: 'workout/session-skip-exercise',
+  WORKOUT_SKIP_EXERCISE: 'workout/session-skip-exercise',
   TIMER_START: 'timer/start',
   TIMER_PAUSE: 'timer/pause',
   TIMER_RESUME: 'timer/resume',
   TIMER_ADD_SECONDS: 'timer/add-seconds',
   TIMER_CANCEL: 'timer/cancel',
+  TIMER_FINISH: 'timer/finish',
   UNDO_DELETE: 'undo/delete',
 });
 
@@ -90,6 +104,7 @@ function withWorkouts(state, workouts) {
   return {
     ...state,
     workouts,
+    activeTimer: normalizeActiveTimerForWorkouts(state.activeTimer, workouts),
     settings: {
       ...state.settings,
       deliveredReminderKeys: pruneDeliveredReminderKeys(
@@ -160,7 +175,7 @@ export function appReducer(currentState, action) {
 
     case ActionTypes.WORKOUT_COMPLETE:
       return updateWorkoutById(state, payload.id ?? payload.workoutId, (workout) => (
-        completeWorkout(workout, payload.result ?? payload)
+        completeWorkout(workout, { ...payload, ...(payload.result ?? {}) })
       ));
 
     case ActionTypes.WORKOUT_CORRECT_RESULT:
@@ -342,6 +357,70 @@ export function appReducer(currentState, action) {
         },
       };
 
+    case ActionTypes.WORKOUT_SESSION_START:
+      return updateWorkoutById(state, payload.id ?? payload.workoutId, (workout) => (
+        startWorkoutSession(workout, payload.now ?? payload.startedAt)
+      ));
+
+    case ActionTypes.WORKOUT_SESSION_UPDATE_SET:
+      return updateWorkoutById(state, payload.id ?? payload.workoutId, (workout) => (
+        updateWorkoutSetResult(
+          workout,
+          payload.exerciseId,
+          payload.setIndex ?? (Number(payload.setNumber) - 1),
+          payload.patch ?? payload.result ?? payload.values ?? {},
+        )
+      ));
+
+    case ActionTypes.WORKOUT_SESSION_COMPLETE_SET: {
+      const workoutId = payload.workoutId ?? payload.id;
+      const target = state.workouts.find((workout) => workout.id === workoutId);
+      if (!target || target.status !== 'planned') return state;
+      const exercise = target.exercises.find((item) => item.id === payload.exerciseId);
+      if (!exercise) return state;
+      const result = payload.result ?? payload.values ?? {};
+      const nextWorkout = completeWorkoutSet(
+        target,
+        exercise.id,
+        payload.setIndex ?? (Number(payload.setNumber) - 1),
+        {
+          ...result,
+          completedAt: result.completedAt ?? payload.now,
+        },
+      );
+      if (nextWorkout === target) return state;
+      const workouts = state.workouts.map((workout) => (
+        workout.id === workoutId ? nextWorkout : workout
+      ));
+      return {
+        ...withWorkouts(state, workouts),
+        activeTimer: payload.skipRest === true
+          ? null
+          : startRestTimer(exercise.restSeconds, {
+            ...payload,
+            workoutId,
+            exerciseId: exercise.id,
+          }),
+      };
+    }
+
+    case ActionTypes.WORKOUT_SESSION_SKIP_EXERCISE: {
+      const workoutId = payload.workoutId ?? payload.id;
+      const target = state.workouts.find((workout) => workout.id === workoutId);
+      if (!target) return state;
+      const nextWorkout = skipRemainingExerciseSets(target, payload.exerciseId);
+      if (nextWorkout === target) return state;
+      const workouts = state.workouts.map((workout) => (
+        workout.id === workoutId ? nextWorkout : workout
+      ));
+      const timerMatchesExercise = state.activeTimer?.workoutId === workoutId
+        && state.activeTimer?.exerciseId === payload.exerciseId;
+      return {
+        ...withWorkouts(state, workouts),
+        activeTimer: timerMatchesExercise ? null : state.activeTimer,
+      };
+    }
+
     case ActionTypes.WORKOUT_START_REST: {
       const workoutId = payload.workoutId ?? payload.id;
       const target = state.workouts.find((workout) => workout.id === workoutId);
@@ -355,9 +434,10 @@ export function appReducer(currentState, action) {
         workoutId,
         exerciseId: exercise.id,
       });
-      if (!activeTimer) return state;
-
-      const nextWorkout = completeNextWorkoutSet(target, exercise.id);
+      const nextWorkout = completeNextWorkoutSet(target, exercise.id, {
+        completedAt: payload.now,
+      });
+      if (nextWorkout === target && !activeTimer) return state;
       const workouts = nextWorkout === target
         ? state.workouts
         : state.workouts.map((workout) => (workout.id === workoutId ? nextWorkout : workout));
@@ -388,6 +468,9 @@ export function appReducer(currentState, action) {
 
     case ActionTypes.TIMER_CANCEL:
       return { ...state, activeTimer: null };
+
+    case ActionTypes.TIMER_FINISH:
+      return state.activeTimer ? { ...state, activeTimer: null } : state;
 
     case ActionTypes.UNDO_DELETE:
       return restoreDeletionSnapshot(state, payload.snapshot ?? payload, {

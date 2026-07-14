@@ -64,6 +64,26 @@ export function normalizeActiveTimer(input) {
   };
 }
 
+/**
+ * Keeps standalone timers, but rejects timers linked to a workout/exercise
+ * that can no longer own an active rest period.
+ * @param {unknown} input
+ * @param {import('./model.js').Workout[]} workouts
+ */
+export function normalizeActiveTimerForWorkouts(input, workouts) {
+  const timer = normalizeActiveTimer(input);
+  if (!timer?.workoutId) return timer;
+
+  const workout = Array.isArray(workouts)
+    ? workouts.find((item) => item.id === timer.workoutId && item.status === 'planned')
+    : null;
+  if (!workout) return null;
+  if (timer.exerciseId && !workout.exercises.some((exercise) => exercise.id === timer.exerciseId)) {
+    return null;
+  }
+  return timer;
+}
+
 /** @param {import('./model.js').ActiveTimer|null} timer @param {Date|number|string} now */
 export function getTimerRemainingSeconds(timer, now = Date.now()) {
   const normalized = normalizeActiveTimer(timer);

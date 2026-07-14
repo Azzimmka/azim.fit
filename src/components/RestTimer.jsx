@@ -1,4 +1,5 @@
 import { Pause, Play, Plus, Timer, X } from 'lucide-react';
+import { prepareTimerSound } from '../features/timer/timerSound.js';
 
 const pluralRules = new Intl.PluralRules('ru-RU');
 
@@ -36,6 +37,11 @@ function timerAccessibleLabel(seconds) {
   if (!minutes) return `Осталось ${secondText}`;
   if (!remainder) return `Осталось ${minuteText}`;
   return `Осталось ${minuteText} ${secondText}`;
+}
+
+function runPreparedTimerAction(action) {
+  void prepareTimerSound();
+  action?.();
 }
 
 /**
@@ -81,7 +87,7 @@ export function RestTimer({
       </div>
       <div className="rest-timer-actions">
         {!expired && (paused ? (
-          <button type="button" className="secondary-button" onClick={onResume} disabled={!onResume} aria-label="Продолжить таймер">
+          <button type="button" className="secondary-button" onClick={() => runPreparedTimerAction(onResume)} disabled={!onResume} aria-label="Продолжить таймер">
             <Play size={17} aria-hidden="true" /> Продолжить
           </button>
         ) : (
@@ -89,7 +95,7 @@ export function RestTimer({
             <Pause size={17} aria-hidden="true" /> Пауза
           </button>
         ))}
-        <button type="button" className="secondary-button" onClick={onAddThirty} disabled={!onAddThirty} aria-label="Добавить 30 секунд">
+        <button type="button" className="secondary-button" onClick={() => runPreparedTimerAction(onAddThirty)} disabled={!onAddThirty} aria-label="Добавить 30 секунд">
           <Plus size={17} aria-hidden="true" /> 30 сек
         </button>
         <button type="button" className="icon-button danger" onClick={onCancel} disabled={!onCancel} aria-label="Отменить таймер">

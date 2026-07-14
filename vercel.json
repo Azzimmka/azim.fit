@@ -5,7 +5,8 @@
     { "source": "/plan", "destination": "/index.html" },
     { "source": "/progress", "destination": "/index.html" },
     { "source": "/settings", "destination": "/index.html" },
-    { "source": "/workouts/:id", "destination": "/index.html" }
+    { "source": "/workouts/:id", "destination": "/index.html" },
+    { "source": "/workouts/:id/session", "destination": "/index.html" }
   ],
   "headers": [
     {
@@ -46,6 +47,12 @@
     },
     {
       "source": "/workouts/:id",
+      "headers": [
+        { "key": "Cache-Control", "value": "public, max-age=0, must-revalidate" }
+      ]
+    },
+    {
+      "source": "/workouts/:id/session",
       "headers": [
         { "key": "Cache-Control", "value": "public, max-age=0, must-revalidate" }
       ]

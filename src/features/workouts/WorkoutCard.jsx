@@ -20,11 +20,35 @@ import { getWorkoutPoints } from '../../domain/points.js';
 
 const TYPE_ICONS = { Силовая: Dumbbell, Кардио: Activity, Мобильность: Sparkles, Другое: Target };
 
+function getExerciseSetResults(exercise) {
+  const sets = Math.max(0, Number(exercise.sets) || 0);
+  if (Array.isArray(exercise.setResults)) {
+    return Array.from({ length: sets }, (_, index) => exercise.setResults[index] ?? {
+      setNumber: index + 1,
+      status: 'pending',
+      weightKg: null,
+      reps: null,
+      rpe: null,
+      completedAt: null,
+    });
+  }
+  const completedSets = Math.max(0, Number(exercise.completedSets) || 0);
+  return Array.from({ length: sets }, (_, index) => ({
+    setNumber: index + 1,
+    status: index < completedSets ? 'completed' : 'pending',
+    weightKg: index < completedSets ? exercise.actualWeightKg ?? null : null,
+    reps: index < completedSets ? exercise.actualReps ?? null : null,
+    rpe: index < completedSets ? exercise.rpe ?? null : null,
+    completedAt: null,
+  }));
+}
+
 export function WorkoutCard({
   workout,
   today,
   compact = false,
   onOpen,
+  onStartSession,
   onToggleSet,
   onComplete,
   onEdit,
@@ -39,10 +63,13 @@ export function WorkoutCard({
   onStartTimer,
 }) {
   const [expandedExerciseIds, setExpandedExerciseIds] = useState(() => new Set());
+  const [selectedSetIndices, setSelectedSetIndices] = useState({});
   const Icon = TYPE_ICONS[workout.type] || Target;
   const exercises = workout.exercises ?? [];
   const total = exercises.reduce((sum, item) => sum + Number(item.sets || 0), 0);
-  const done = exercises.reduce((sum, item) => sum + Number(item.completedSets || 0), 0);
+  const done = exercises.reduce((sum, item) => (
+    sum + getExerciseSetResults(item).filter((result) => result.status === 'completed').length
+  ), 0);
   const percent = total ? Math.round((done / total) * 100) : 0;
   const completed = workout.status === 'completed';
   const skipped = workout.status === 'skipped';
@@ -52,6 +79,8 @@ export function WorkoutCard({
   const canTrack = planned && !future;
   const points = getWorkoutPoints(workout);
   const openWorkout = onOpen ?? onEdit;
+  const openCard = canTrack && onStartSession ? onStartSession : onOpen;
+  const cardInteractive = Boolean(openCard);
   const hasMenuActions = Boolean(
     (planned && onEdit)
     || (planned && onReschedule)
@@ -71,7 +100,21 @@ export function WorkoutCard({
     });
   };
 
+  const handleCardClick = (event) => {
+    if (!cardInteractive) return;
+    if (event.target.closest('button, a, input, textarea, select, summary, details, label')) return;
+    openCard(workout);
+  };
+
+  const handleCardKeyDown = (event) => {
+    if (!cardInteractive || event.target !== event.currentTarget) return;
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    event.preventDefault();
+    openCard(workout);
+  };
+
   if (compact) {
+    const openCompact = canTrack && onStartSession ? onStartSession : openWorkout;
     return (
       <article className="compact-workout">
         <span className={`workout-icon type-${workout.type.toLowerCase()}`}><Icon size={20} aria-hidden="true" /></span>
@@ -80,13 +123,19 @@ export function WorkoutCard({
           <h3>{workout.title}</h3>
           <p>{formatRuCount(exercises.length, 'exercise')} · +{formatRuCount(points, 'point')}</p>
         </div>
-        <button type="button" className="secondary-button compact-open" disabled={!openWorkout} onClick={() => openWorkout?.(workout)}>Открыть</button>
+        <button type="button" className="secondary-button compact-open" disabled={!openCompact} onClick={() => openCompact?.(workout)}>Открыть</button>
       </article>
     );
   }
 
   return (
-    <article className={`workout-card ${completed ? 'completed' : ''} ${missed ? 'missed' : ''} ${skipped ? 'skipped' : ''}`}>
+    <article
+      className={`workout-card ${completed ? 'completed' : ''} ${missed ? 'missed' : ''} ${skipped ? 'skipped' : ''} ${cardInteractive ? 'workout-card-interactive' : ''}`}
+      tabIndex={cardInteractive ? 0 : undefined}
+      aria-label={cardInteractive ? `${canTrack ? 'Начать или продолжить' : 'Открыть'} тренировку «${workout.title}»` : undefined}
+      onClick={handleCardClick}
+      onKeyDown={handleCardKeyDown}
+    >
       <div className="workout-card-head">
         <span className={`workout-icon type-${workout.type.toLowerCase()}`}><Icon size={22} aria-hidden="true" /></span>
         <div className="workout-title-wrap">
@@ -120,6 +169,20 @@ export function WorkoutCard({
           const resultsExpanded = expandedExerciseIds.has(exercise.id);
           const resultPanelId = `exercise-result-${workout.id}-${exercise.id}`;
           const resultEditable = canTrack && Boolean(onUpdateResult);
+          const setResults = getExerciseSetResults(exercise);
+          const selectedSetIndex = selectedSetIndices[exercise.id];
+          const lastCompletedIndex = setResults.findLastIndex((result) => (
+            result.status === 'completed'
+          ));
+          const resultSetIndex = Number.isInteger(selectedSetIndex)
+            && selectedSetIndex >= 0
+            && selectedSetIndex < setResults.length
+            ? selectedSetIndex
+            : (lastCompletedIndex >= 0 ? lastCompletedIndex : 0);
+          const resultSet = setResults[resultSetIndex] ?? null;
+          const completedSetCount = setResults.filter((result) => (
+            result.status === 'completed'
+          )).length;
           return (
             <div className="exercise-row-v2" key={exercise.id}>
               <div className="exercise-number">{String(exerciseIndex + 1).padStart(2, '0')}</div>
@@ -127,20 +190,28 @@ export function WorkoutCard({
                 <strong>{exercise.name}</strong>
                 <span>{exercise.sets} × {exercise.plannedReps}{exercise.plannedWeightKg ? ` · ${exercise.plannedWeightKg} кг` : ''}</span>
               </div>
-              <div className="set-dots" aria-label={`${formatRuCount(exercise.completedSets, 'set')} из ${exercise.sets}`}>
-                {Array.from({ length: Number(exercise.sets) }, (_, index) => {
-                  const pressed = index < Number(exercise.completedSets || 0);
+              <div className="set-dots" aria-label={`${formatRuCount(completedSetCount, 'set')} из ${exercise.sets}`}>
+                {setResults.map((setResult, index) => {
+                  const pressed = setResult.status === 'completed';
+                  const setStatusLabel = pressed
+                    ? 'выполнен'
+                    : setResult.status === 'skipped' ? 'пропущен' : 'не выполнен';
                   return (
                     <button
                       type="button"
                       key={index}
-                      className={pressed ? 'set-dot done' : 'set-dot'}
+                      className={`set-dot${pressed ? ' done' : ''}${setResult.status === 'skipped' ? ' skipped' : ''}`}
                       disabled={!canTrack || !onToggleSet}
                       aria-pressed={pressed}
-                      aria-label={`Подход ${index + 1}: ${pressed ? 'выполнен' : 'не выполнен'}`}
-                      onClick={() => onToggleSet?.(workout.id, exercise.id, index)}
+                      aria-label={`Подход ${index + 1}: ${setStatusLabel}`}
+                      onClick={() => {
+                        setSelectedSetIndices((current) => ({ ...current, [exercise.id]: index }));
+                        onToggleSet?.(workout.id, exercise.id, index);
+                      }}
                     >
-                      {pressed ? <Check size={14} strokeWidth={3} aria-hidden="true" /> : index + 1}
+                      {pressed
+                        ? <Check size={14} strokeWidth={3} aria-hidden="true" />
+                        : setResult.status === 'skipped' ? '—' : index + 1}
                     </button>
                   );
                 })}
@@ -151,9 +222,10 @@ export function WorkoutCard({
               </div>
               {resultsExpanded && (
                 <div className="exercise-result-fields" id={resultPanelId}>
-                  <label><span>Вес, кг</span><input type="number" min="0.5" max="1000" step="0.5" disabled={!resultEditable} value={exercise.actualWeightKg ?? ''} onChange={(event) => onUpdateResult?.(workout.id, exercise.id, 'actualWeightKg', event.target.value)} /></label>
-                  <label><span>Повторы</span><input type="number" min="1" max="999" step="1" disabled={!resultEditable} value={exercise.actualReps ?? ''} onChange={(event) => onUpdateResult?.(workout.id, exercise.id, 'actualReps', event.target.value)} /></label>
-                  <label><span>RPE</span><input type="number" min="1" max="10" step="0.5" disabled={!resultEditable} value={exercise.rpe ?? ''} onChange={(event) => onUpdateResult?.(workout.id, exercise.id, 'rpe', event.target.value)} /></label>
+                  <strong className="exercise-result-target">Подход {resultSetIndex + 1}</strong>
+                  <label><span>Вес, кг</span><input type="number" min="0.5" max="1000" step="0.5" disabled={!resultEditable} value={resultSet?.weightKg ?? ''} onChange={(event) => onUpdateResult?.(workout.id, exercise.id, resultSetIndex, 'actualWeightKg', event.target.value)} /></label>
+                  <label><span>Повторы</span><input type="number" min="1" max="999" step="1" disabled={!resultEditable} value={resultSet?.reps ?? ''} onChange={(event) => onUpdateResult?.(workout.id, exercise.id, resultSetIndex, 'actualReps', event.target.value)} /></label>
+                  <label><span>RPE</span><input type="number" min="1" max="10" step="0.5" disabled={!resultEditable} value={resultSet?.rpe ?? ''} onChange={(event) => onUpdateResult?.(workout.id, exercise.id, resultSetIndex, 'rpe', event.target.value)} /></label>
                 </div>
               )}
             </div>

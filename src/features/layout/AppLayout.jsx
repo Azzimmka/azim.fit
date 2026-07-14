@@ -1,5 +1,5 @@
 import { BarChart3, CalendarDays, Flame, LayoutDashboard, Settings, Star, Trophy, Zap } from 'lucide-react';
-import { NavLink } from 'react-router-dom';
+import { NavLink, useLocation } from 'react-router-dom';
 import { formatRuCount } from '../../domain/plural.js';
 
 const NAV_ITEMS = [
@@ -12,10 +12,14 @@ const MOBILE_NAV_ITEMS = [
   { to: '/settings', label: 'Настройки', short: 'Настройки', icon: Settings },
 ];
 
-export function AppLayout({ children, points, level, levelProgress, remainingPoints, missedCount }) {
+export function AppLayout({ children, points, level, levelProgress, remainingPoints, missedCount, immersive = false }) {
+  const { pathname } = useLocation();
+  const sessionPath = /^\/workouts\/[^/]+\/session\/?$/.test(pathname);
+  const immersiveMode = immersive || sessionPath;
+
   return (
-    <div className="app-shell">
-      <aside className="sidebar">
+    <div className={`app-shell ${immersiveMode ? 'immersive-session-shell' : ''}`}>
+      {!immersiveMode && <aside className="sidebar">
         <NavLink className="brand" to="/today" aria-label="AZIM.FIT — на главную">
           <span className="brand-mark"><Zap size={18} fill="currentColor" /></span>
           <span>AZIM<span>.FIT</span></span>
@@ -36,23 +40,23 @@ export function AppLayout({ children, points, level, levelProgress, remainingPoi
           <p>До нового уровня осталось {formatRuCount(remainingPoints, 'point')}</p>
         </div>
         <NavLink className="profile-row" to="/settings"><div className="avatar">А</div><div><strong>Азим</strong><small>Настройки</small></div><Settings size={18} /></NavLink>
-      </aside>
+      </aside>}
 
-      <main className="main-content" id="main-content">
-        <div className="mobile-topbar">
+      <main className={`main-content ${immersiveMode ? 'immersive-session-content' : ''}`} id="main-content">
+        {!immersiveMode && <div className="mobile-topbar">
           <NavLink className="brand" to="/today"><span className="brand-mark"><Zap size={17} fill="currentColor" /></span><span>AZIM<span>.FIT</span></span></NavLink>
           <div className="mobile-points" aria-label={formatRuCount(points, 'point')}><Star size={15} fill="currentColor" aria-hidden="true" /> {points}</div>
-        </div>
-        <div className="page-container">{children}</div>
+        </div>}
+        <div className={immersiveMode ? 'session-page-container' : 'page-container'}>{children}</div>
       </main>
 
-      <nav className="mobile-nav" aria-label="Мобильная навигация">
+      {!immersiveMode && <nav className="mobile-nav" aria-label="Мобильная навигация">
         {MOBILE_NAV_ITEMS.map(({ to, short, icon: Icon }) => (
           <NavLink key={to} to={to} className={({ isActive }) => isActive ? 'active' : ''}>
             <span className="mobile-nav-icon"><Icon size={21} />{to === '/plan' && missedCount > 0 && <i />}</span><span>{short}</span>
           </NavLink>
         ))}
-      </nav>
+      </nav>}
     </div>
   );
 }

@@ -9,6 +9,14 @@ describe('points', () => {
   it('centralizes the 20 + 5 per set formula', () => {
     expect(calculatePlanPoints([{ sets: 4 }, { sets: 3 }])).toBe(55);
     expect(calculateAwardedPoints([{ completedSets: 4 }, { completedSets: 2 }])).toBe(50);
+    expect(calculateAwardedPoints([{
+      completedSets: 99,
+      setResults: [
+        { status: 'completed' },
+        { status: 'skipped' },
+        { status: 'pending' },
+      ],
+    }])).toBe(25);
   });
 
   it('uses persisted historical points only for completed workouts', () => {
@@ -17,4 +25,3 @@ describe('points', () => {
     expect(getWorkoutPoints({ status: 'planned', pointsAwarded: 95, exercises })).toBe(35);
   });
 });
-

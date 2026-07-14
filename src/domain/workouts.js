@@ -1,6 +1,7 @@
 import { compareCalendarDates, getToday, isCalendarDate } from './dates.js';
 import { makeId } from './id.js';
 import { calculateAwardedPoints } from './points.js';
+import { normalizeExerciseName } from './records.js';
 import {
   normalizeExercise,
   normalizePlanSnapshot,
@@ -11,6 +12,179 @@ import {
 function nowIso(now) {
   const timestamp = new Date(now ?? Date.now()).getTime();
   return new Date(Number.isFinite(timestamp) ? timestamp : Date.now()).toISOString();
+}
+
+function hasOwn(value, key) {
+  return Object.prototype.hasOwnProperty.call(value ?? {}, key);
+}
+
+function isBlankOptionalValue(value) {
+  return value === null || value === undefined || value === '';
+}
+
+function isValidSetValuePatch(result) {
+  if (hasOwn(result, 'weightKg') && !isBlankOptionalValue(result.weightKg)) {
+    const weight = Number(result.weightKg);
+    if (!Number.isFinite(weight) || weight < 0.5 || weight > 1_000) return false;
+  }
+  if (hasOwn(result, 'reps') && !isBlankOptionalValue(result.reps)) {
+    const reps = Number(result.reps);
+    if (!Number.isInteger(reps) || reps < 1 || reps > 999) return false;
+  }
+  if (hasOwn(result, 'rpe') && !isBlankOptionalValue(result.rpe)) {
+    const rpe = Number(result.rpe);
+    if (!Number.isFinite(rpe) || rpe < 1 || rpe > 10) return false;
+  }
+  return true;
+}
+
+/** @param {import('./model.js').Exercise} exercise */
+function completedSetResults(exercise) {
+  if (Array.isArray(exercise?.setResults)) {
+    return exercise.setResults.filter((result) => result.status === 'completed');
+  }
+  const completedSets = Math.max(0, Math.trunc(Number(exercise?.completedSets) || 0));
+  return Array.from({ length: completedSets }, (_, index) => ({
+    setNumber: index + 1,
+    status: 'completed',
+    weightKg: exercise.actualWeightKg ?? null,
+    reps: exercise.actualReps ?? null,
+    rpe: exercise.rpe ?? null,
+    completedAt: null,
+  }));
+}
+
+/**
+ * Applies result-editor patches without flattening genuine per-set data.
+ * Aggregate expansion is reserved for a raw legacy exercise that did not have
+ * setResults at all; normalized exercises update one selected/completed set.
+ */
+function applyExerciseResultPatch(exercise, patch = {}) {
+  if (Array.isArray(patch.setResults)) {
+    return normalizeExercise({ ...exercise, setResults: patch.setResults });
+  }
+
+  const hasAggregatePatch = ['completedSets', 'actualWeightKg', 'actualReps', 'rpe']
+    .some((key) => hasOwn(patch, key));
+  if (!hasAggregatePatch) return exercise;
+
+  if (!Array.isArray(exercise.setResults)) {
+    return normalizeExercise({ ...exercise, ...patch });
+  }
+
+  const requestedIndex = Number(patch.setIndex);
+  const lastCompletedIndex = exercise.setResults.findLastIndex(
+    (result) => result.status === 'completed',
+  );
+  const targetIndex = Number.isInteger(requestedIndex)
+    && requestedIndex >= 0
+    && requestedIndex < exercise.setResults.length
+    ? requestedIndex
+    : (lastCompletedIndex >= 0 ? lastCompletedIndex : 0);
+  const hasValuePatch = ['actualWeightKg', 'actualReps', 'rpe']
+    .some((key) => hasOwn(patch, key));
+  if (!hasValuePatch || !exercise.setResults[targetIndex]) return exercise;
+
+  const setResults = exercise.setResults.map((result, index) => index === targetIndex
+    ? {
+      ...result,
+      weightKg: hasOwn(patch, 'actualWeightKg') ? patch.actualWeightKg : result.weightKg,
+      reps: hasOwn(patch, 'actualReps') ? patch.actualReps : result.reps,
+      rpe: hasOwn(patch, 'rpe') ? patch.rpe : result.rpe,
+    }
+    : result);
+  return normalizeExercise({ ...exercise, setResults });
+}
+
+/** @param {import('./model.js').Workout} workout @param {Date|number|string} now */
+export function startWorkoutSession(workout, now = Date.now()) {
+  if (workout?.status !== 'planned' || workout.startedAt) return workout;
+  const startedAt = nowIso(now);
+  if (compareCalendarDates(workout.plannedDate, getToday(startedAt)) > 0) return workout;
+  return { ...workout, startedAt };
+}
+
+/**
+ * @param {import('./model.js').Workout} workout
+ * @returns {{exerciseId: string, exerciseIndex: number, setIndex: number, setNumber: number}|null}
+ */
+export function findFirstPendingWorkoutSet(workout) {
+  for (let exerciseIndex = 0; exerciseIndex < (workout?.exercises?.length ?? 0); exerciseIndex += 1) {
+    const exercise = workout.exercises[exerciseIndex];
+    const setIndex = exercise.setResults.findIndex((result) => result.status === 'pending');
+    if (setIndex >= 0) {
+      return {
+        exerciseId: exercise.id,
+        exerciseIndex,
+        setIndex,
+        setNumber: setIndex + 1,
+      };
+    }
+  }
+  return null;
+}
+
+/**
+ * Provides initial fields for a pending set without mutating the workout.
+ * @param {import('./model.js').Workout} workout
+ * @param {string} exerciseId
+ * @param {number} setIndex Zero-based set index.
+ * @param {import('./model.js').Workout[]} previousWorkouts
+ */
+export function getWorkoutSetDefaults(workout, exerciseId, setIndex, previousWorkouts = []) {
+  const exercise = workout?.exercises?.find((item) => item.id === exerciseId);
+  if (!exercise) return { weightKg: null, reps: null, rpe: null };
+
+  const safeIndex = Math.min(
+    exercise.setResults.length,
+    Math.max(0, Math.trunc(Number(setIndex) || 0)),
+  );
+  const previousSet = exercise.setResults
+    .slice(0, safeIndex)
+    .reverse()
+    .find((result) => result.status === 'completed') ?? null;
+
+  const normalizedName = normalizeExerciseName(exercise.name);
+  let historicalSet = null;
+  const completedWorkouts = previousWorkouts
+    .filter((item) => item?.status === 'completed' && item.id !== workout.id)
+    .sort((left, right) => (
+      new Date(right.completedAt).getTime() - new Date(left.completedAt).getTime()
+    ));
+  for (const previousWorkout of completedWorkouts) {
+    const matchingExercise = previousWorkout.exercises?.find((item) => (
+      normalizeExerciseName(item.name) === normalizedName
+    ));
+    historicalSet = completedSetResults(matchingExercise).at(-1) ?? null;
+    if (historicalSet) break;
+  }
+
+  const plannedRepsText = String(exercise.plannedReps ?? '').trim();
+  const plannedReps = /^\d+$/.test(plannedRepsText) ? Number(plannedRepsText) : null;
+  return {
+    weightKg: previousSet?.weightKg ?? historicalSet?.weightKg ?? exercise.plannedWeightKg ?? null,
+    reps: previousSet?.reps ?? historicalSet?.reps ?? plannedReps,
+    rpe: previousSet?.rpe ?? historicalSet?.rpe ?? null,
+  };
+}
+
+/** @param {import('./model.js').Exercise} exercise */
+export function calculateExerciseVolume(exercise) {
+  return completedSetResults(exercise).reduce((sum, result) => {
+    const weight = Number(result.weightKg);
+    const reps = Number(result.reps);
+    return Number.isFinite(weight) && weight > 0 && Number.isFinite(reps) && reps > 0
+      ? sum + weight * reps
+      : sum;
+  }, 0);
+}
+
+/** @param {import('./model.js').Workout} workout */
+export function calculateWorkoutVolume(workout) {
+  return (workout?.exercises ?? []).reduce(
+    (sum, exercise) => sum + calculateExerciseVolume(exercise),
+    0,
+  );
 }
 
 /** @param {import('./model.js').Workout} workout */
@@ -42,6 +216,7 @@ export function createWorkoutFromPlan(plan, overrides = {}, options = {}) {
     occurrenceDate: isCalendarDate(overrides.occurrenceDate)
       ? overrides.occurrenceDate
       : plannedDate,
+    startedAt: null,
     completedAt: null,
     pointsAwarded: 0,
     resultNotes: '',
@@ -109,25 +284,124 @@ export function updatePlannedWorkout(workout, patch) {
 }
 
 /**
- * Toggles a single set using the same "all sets through index" interaction as
- * V1 while keeping one aggregate result per exercise.
+ * Toggles exactly one set. Other completed, pending, or skipped results keep
+ * their status and values.
  * @param {import('./model.js').Workout} workout
  * @param {string} exerciseId
  * @param {number} index Zero-based set index.
  */
 export function toggleWorkoutSet(workout, exerciseId, index) {
   if (workout?.status !== 'planned') return workout;
-  return {
-    ...workout,
-    exercises: workout.exercises.map((exercise) => {
-      if (exercise.id !== exerciseId) return exercise;
-      const safeIndex = Math.min(exercise.sets - 1, Math.max(0, Math.trunc(Number(index) || 0)));
+  const numericIndex = Number(index);
+  if (!Number.isInteger(numericIndex) || numericIndex < 0) return workout;
+  let changed = false;
+  const exercises = workout.exercises.map((exercise) => {
+    if (exercise.id !== exerciseId || numericIndex >= exercise.setResults.length) return exercise;
+    const setResults = exercise.setResults.map((result, resultIndex) => resultIndex === numericIndex
+      ? {
+        ...result,
+        status: result.status === 'completed' ? 'pending' : 'completed',
+        completedAt: null,
+      }
+      : result);
+    changed = true;
+    return normalizeExercise({ ...exercise, setResults });
+  });
+  return changed ? { ...workout, exercises } : workout;
+}
+
+/**
+ * Updates values of one set without changing its completion status.
+ * @param {import('./model.js').Workout} workout
+ * @param {string} exerciseId
+ * @param {number} setIndex Zero-based set index.
+ * @param {{weightKg?: number|null, reps?: number|null, rpe?: number|null}} patch
+ */
+export function updateWorkoutSetResult(workout, exerciseId, setIndex, patch = {}) {
+  if (workout?.status !== 'planned') return workout;
+  if (!isValidSetValuePatch(patch)) return workout;
+  const numericIndex = Number(setIndex);
+  if (!Number.isInteger(numericIndex) || numericIndex < 0) return workout;
+
+  let changed = false;
+  const exercises = workout.exercises.map((exercise) => {
+    if (exercise.id !== exerciseId || numericIndex >= exercise.setResults.length) return exercise;
+    const setResults = exercise.setResults.map((result, index) => {
+      if (index !== numericIndex) return result;
+      changed = true;
       return {
-        ...exercise,
-        completedSets: safeIndex < exercise.completedSets ? safeIndex : safeIndex + 1,
+        ...result,
+        weightKg: hasOwn(patch, 'weightKg') ? patch.weightKg : result.weightKg,
+        reps: hasOwn(patch, 'reps') ? patch.reps : result.reps,
+        rpe: hasOwn(patch, 'rpe') ? patch.rpe : result.rpe,
       };
-    }),
-  };
+    });
+    return normalizeExercise({ ...exercise, setResults });
+  });
+  return changed ? { ...workout, exercises } : workout;
+}
+
+/**
+ * Completes exactly one set. Repeating the same completion is idempotent;
+ * corrections use updateWorkoutSetResult instead.
+ * @param {import('./model.js').Workout} workout
+ * @param {string} exerciseId
+ * @param {number} setIndex Zero-based set index.
+ * @param {{weightKg?: number|null, reps?: number|null, rpe?: number|null, completedAt?: Date|number|string}} result
+ */
+export function completeWorkoutSet(workout, exerciseId, setIndex, result = {}) {
+  if (workout?.status !== 'planned') return workout;
+  if (!isValidSetValuePatch(result)) return workout;
+  const numericIndex = Number(setIndex);
+  if (!Number.isInteger(numericIndex) || numericIndex < 0) return workout;
+
+  let changed = false;
+  const exercises = workout.exercises.map((exercise) => {
+    if (exercise.id !== exerciseId || numericIndex >= exercise.setResults.length) return exercise;
+    if (exercise.setResults[numericIndex].status === 'completed') return exercise;
+    const setResults = exercise.setResults.map((setResult, index) => index === numericIndex
+      ? {
+        ...setResult,
+        status: 'completed',
+        weightKg: hasOwn(result, 'weightKg') ? result.weightKg : setResult.weightKg,
+        reps: hasOwn(result, 'reps') ? result.reps : setResult.reps,
+        rpe: hasOwn(result, 'rpe') ? result.rpe : setResult.rpe,
+        completedAt: nowIso(result.completedAt),
+      }
+      : setResult);
+    changed = true;
+    return normalizeExercise({ ...exercise, setResults });
+  });
+  return changed ? { ...workout, exercises } : workout;
+}
+
+/**
+ * Marks only remaining pending sets of an exercise as skipped.
+ * @param {import('./model.js').Workout} workout
+ * @param {string} exerciseId
+ */
+export function skipRemainingExerciseSets(workout, exerciseId) {
+  if (workout?.status !== 'planned') return workout;
+  let changed = false;
+  const exercises = workout.exercises.map((exercise) => {
+    if (exercise.id !== exerciseId) return exercise;
+    let exerciseChanged = false;
+    const setResults = exercise.setResults.map((result) => {
+      if (result.status !== 'pending') return result;
+      changed = true;
+      exerciseChanged = true;
+      return {
+        ...result,
+        status: 'skipped',
+        weightKg: null,
+        reps: null,
+        rpe: null,
+        completedAt: null,
+      };
+    });
+    return exerciseChanged ? normalizeExercise({ ...exercise, setResults }) : exercise;
+  });
+  return changed ? { ...workout, exercises } : workout;
 }
 
 /**
@@ -137,28 +411,18 @@ export function toggleWorkoutSet(workout, exerciseId, index) {
  * @param {import('./model.js').Workout} workout
  * @param {string} exerciseId
  */
-export function completeNextWorkoutSet(workout, exerciseId) {
+export function completeNextWorkoutSet(workout, exerciseId, result = {}) {
   if (workout?.status !== 'planned') return workout;
-
-  let changed = false;
-  const exercises = workout.exercises.map((exercise) => {
-    if (exercise.id !== exerciseId) return exercise;
-    const plannedSets = Math.max(0, Math.trunc(Number(exercise.sets) || 0));
-    const completedSets = Math.min(
-      plannedSets,
-      Math.max(0, Math.trunc(Number(exercise.completedSets) || 0)),
-    );
-    if (completedSets >= plannedSets) return exercise;
-    changed = true;
-    return { ...exercise, completedSets: completedSets + 1 };
-  });
-
-  return changed ? { ...workout, exercises } : workout;
+  const exercise = workout.exercises.find((item) => item.id === exerciseId);
+  const setIndex = exercise?.setResults.findIndex((item) => item.status === 'pending') ?? -1;
+  return setIndex >= 0
+    ? completeWorkoutSet(workout, exerciseId, setIndex, result)
+    : workout;
 }
 
 /**
- * Stores aggregate in-progress results before completion. Plan fields remain
- * untouched and there is still exactly one result value per exercise.
+ * Stores in-progress results before completion. Aggregate editor patches are
+ * expanded to per-set results for backwards compatibility.
  * @param {import('./model.js').Workout} workout
  * @param {{resultNotes?: string, exercises?: object[]}} result
  */
@@ -172,22 +436,12 @@ export function updateWorkoutResultDraft(workout, result = {}) {
   return {
     ...workout,
     resultNotes: typeof result.resultNotes === 'string'
-      ? result.resultNotes.trim()
+      ? result.resultNotes
       : workout.resultNotes,
     exercises: workout.exercises.map((exercise) => {
       const patch = patches.get(exercise.id);
       if (!patch) return exercise;
-      return normalizeExercise({
-        ...exercise,
-        completedSets: patch.completedSets ?? exercise.completedSets,
-        actualWeightKg: Object.prototype.hasOwnProperty.call(patch, 'actualWeightKg')
-          ? patch.actualWeightKg
-          : exercise.actualWeightKg,
-        actualReps: Object.prototype.hasOwnProperty.call(patch, 'actualReps')
-          ? patch.actualReps
-          : exercise.actualReps,
-        rpe: Object.prototype.hasOwnProperty.call(patch, 'rpe') ? patch.rpe : exercise.rpe,
-      });
+      return applyExerciseResultPatch(exercise, patch);
     }),
   };
 }
@@ -196,7 +450,7 @@ export function updateWorkoutResultDraft(workout, result = {}) {
  * Future workouts are deliberately rejected. Late completion retains the
  * original plannedDate while completedAt records the actual event time.
  * @param {import('./model.js').Workout} workout
- * @param {{completedAt?: Date|number|string, resultNotes?: string, exercises?: object[]}} result
+ * @param {{completedAt?: Date|number|string, resultNotes?: string, exercises?: object[], requireResolvedSets?: boolean}} result
  */
 export function completeWorkout(workout, result = {}) {
   if (workout?.status !== 'planned') return workout;
@@ -209,10 +463,16 @@ export function completeWorkout(workout, result = {}) {
       .filter((exercise) => exercise?.id)
       .map((exercise) => [exercise.id, exercise]),
   );
-  const exercises = workout.exercises.map((exercise) => normalizeExercise({
-    ...exercise,
-    ...(resultById.get(exercise.id) ?? {}),
-  }));
+  const exercises = workout.exercises.map((exercise) => {
+    const patch = resultById.get(exercise.id);
+    return patch ? applyExerciseResultPatch(exercise, patch) : exercise;
+  });
+  if (
+    result.requireResolvedSets === true
+    && exercises.some((exercise) => exercise.setResults.some((set) => set.status === 'pending'))
+  ) {
+    return workout;
+  }
 
   return {
     ...workout,
@@ -241,17 +501,7 @@ export function correctWorkoutResult(workout, correction = {}) {
   const exercises = workout.exercises.map((exercise) => {
     const patch = patches.get(exercise.id);
     if (!patch) return exercise;
-    return normalizeExercise({
-      ...exercise,
-      completedSets: patch.completedSets ?? exercise.completedSets,
-      actualWeightKg: Object.prototype.hasOwnProperty.call(patch, 'actualWeightKg')
-        ? patch.actualWeightKg
-        : exercise.actualWeightKg,
-      actualReps: Object.prototype.hasOwnProperty.call(patch, 'actualReps')
-        ? patch.actualReps
-        : exercise.actualReps,
-      rpe: Object.prototype.hasOwnProperty.call(patch, 'rpe') ? patch.rpe : exercise.rpe,
-    });
+    return applyExerciseResultPatch(exercise, patch);
   });
   return {
     ...workout,

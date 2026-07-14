@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  deleteSeriesAndFollowing,
   materializeSeries,
   splitSeriesAndFollowing,
 } from './recurrence.js';
@@ -101,5 +102,55 @@ describe('recurrence materialization', () => {
       .filter((workout) => workout.seriesId === 'series-shifted')
       .map((workout) => workout.plannedDate))
       .toEqual(['2026-07-17', '2026-07-24']);
+  });
+
+  it('preserves started planned occurrences while replacing untouched following ones', () => {
+    const series = seriesFixture();
+    const workouts = materializeSeries(series, { idFactory: sequentialIds() });
+    const started = {
+      ...workouts[1],
+      startedAt: '2026-07-15T10:00:00.000Z',
+      exercises: workouts[1].exercises.map((exercise) => ({
+        ...exercise,
+        completedSets: 1,
+        setResults: exercise.setResults.map((result, index) => index === 0
+          ? { ...result, status: 'completed', completedAt: '2026-07-15T10:01:00.000Z' }
+          : result),
+      })),
+    };
+    const split = splitSeriesAndFollowing(
+      series,
+      [workouts[0], started, workouts[2], workouts[3]],
+      '2026-07-15',
+      { id: 'series-b', planSnapshot: { title: 'Новая база' } },
+      { idFactory: sequentialIds() },
+    );
+
+    expect(split.workouts.find((workout) => workout.id === started.id)).toEqual({
+      ...started,
+      seriesId: null,
+    });
+    expect(split.newSeries.excludedOccurrenceDates).toContain('2026-07-15');
+    expect(split.workouts.filter((workout) => (
+      workout.occurrenceDate === '2026-07-15'
+    ))).toHaveLength(1);
+  });
+
+  it('detaches a protected started occurrence when deleting following instances', () => {
+    const series = seriesFixture();
+    const workouts = materializeSeries(series, { idFactory: sequentialIds() });
+    const started = { ...workouts[1], startedAt: '2026-07-15T10:00:00.000Z' };
+    const result = deleteSeriesAndFollowing(
+      series,
+      [workouts[0], started, workouts[2], workouts[3]],
+      '2026-07-15',
+    );
+
+    expect(result.series.endsOn).toBe('2026-07-14');
+    expect(result.workouts).toContainEqual({ ...started, seriesId: null });
+    expect(result.workouts.some((workout) => (
+      workout.seriesId === 'series-a'
+      && workout.occurrenceDate >= '2026-07-15'
+    ))).toBe(false);
   });
 });

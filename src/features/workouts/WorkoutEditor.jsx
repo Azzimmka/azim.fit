@@ -10,6 +10,7 @@ import {
 } from '../../domain/dates.js';
 import { DEFAULT_REMINDER, REMINDER_OFFSETS } from '../../domain/model.js';
 import { calculatePlanPoints } from '../../domain/points.js';
+import { normalizeExercise } from '../../domain/schema.js';
 
 const WEEKDAYS = [
   { value: 1, label: 'Пн' },
@@ -29,6 +30,12 @@ const REMINDER_OPTIONS = [
   { value: '30', label: 'За 30 минут' },
   { value: '60', label: 'За 60 минут' },
 ];
+
+const SET_RESULT_LABELS = Object.freeze({
+  completed: 'Выполнен',
+  pending: 'Ожидает',
+  skipped: 'Пропущен',
+});
 
 const makeId = () => globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 const toFormValue = (value) => value == null ? '' : value;
@@ -66,11 +73,29 @@ function normalizeExerciseForForm(exercise) {
   };
 }
 
-function initialWorkoutForm(initialDate, workout, defaultReminder) {
+function normalizeResultExerciseForForm(exercise, completedAt) {
+  const normalized = normalizeExercise(exercise, { completedAt });
+  return {
+    ...normalized,
+    setResults: normalized.setResults.map((setResult) => {
+      const completed = setResult.status === 'completed';
+      return {
+        ...setResult,
+        weightKg: completed ? toFormValue(setResult.weightKg) : '',
+        reps: completed ? toFormValue(setResult.reps) : '',
+        rpe: completed ? toFormValue(setResult.rpe) : '',
+      };
+    }),
+  };
+}
+
+function initialWorkoutForm(initialDate, workout, defaultReminder, resultMode = false) {
   const source = workout ?? {};
   const exercises = Array.isArray(source.exercises) && source.exercises.length
-    ? source.exercises.map(normalizeExerciseForForm)
-    : [newExercise()];
+    ? source.exercises.map((exercise) => resultMode
+      ? normalizeResultExerciseForForm(exercise, source.completedAt ?? null)
+      : normalizeExerciseForForm(exercise))
+    : (resultMode ? [] : [newExercise()]);
   return {
     templateName: '',
     title: source.title ?? '',
@@ -105,13 +130,22 @@ function cleanPlanExercise(exercise) {
   };
 }
 
+function cleanSetResult(setResult) {
+  const completed = setResult.status === 'completed';
+  return {
+    setNumber: Number(setResult.setNumber),
+    status: setResult.status,
+    weightKg: completed ? optionalNumber(setResult.weightKg) : null,
+    reps: completed ? optionalNumber(setResult.reps) : null,
+    rpe: completed ? optionalNumber(setResult.rpe) : null,
+    completedAt: completed ? setResult.completedAt ?? null : null,
+  };
+}
+
 function cleanResultExercise(exercise) {
   return {
     id: exercise.id,
-    completedSets: Math.trunc(Number(exercise.completedSets)),
-    actualWeightKg: optionalNumber(exercise.actualWeightKg),
-    actualReps: optionalNumber(exercise.actualReps),
-    rpe: optionalNumber(exercise.rpe),
+    setResults: exercise.setResults.map(cleanSetResult),
   };
 }
 
@@ -162,14 +196,16 @@ function validatePlan(form, { includeDate, templateMode, repeat, weekdays, inter
 
 function validateResult(form) {
   for (const exercise of form.exercises) {
-    const completedSets = Number(exercise.completedSets);
-    if (!Number.isInteger(completedSets) || completedSets < 0 || completedSets > Number(exercise.sets)) return `Проверь выполненные подходы: ${exercise.name}.`;
-    const weight = optionalNumber(exercise.actualWeightKg);
-    if (weight !== null && (!Number.isFinite(weight) || weight <= 0 || weight > 1000)) return `Проверь фактический вес: ${exercise.name}.`;
-    const reps = optionalNumber(exercise.actualReps);
-    if (reps !== null && (!Number.isInteger(reps) || reps < 1 || reps > 999)) return `Проверь повторы: ${exercise.name}.`;
-    const rpe = optionalNumber(exercise.rpe);
-    if (rpe !== null && (!Number.isFinite(rpe) || rpe < 1 || rpe > 10)) return `RPE должен быть от 1 до 10: ${exercise.name}.`;
+    for (const setResult of exercise.setResults) {
+      if (setResult.status !== 'completed') continue;
+      const suffix = `${exercise.name}, подход ${setResult.setNumber}.`;
+      const weight = optionalNumber(setResult.weightKg);
+      if (weight !== null && (!Number.isFinite(weight) || weight < 0.5 || weight > 1000)) return `Проверь фактический вес: ${suffix}`;
+      const reps = optionalNumber(setResult.reps);
+      if (reps !== null && (!Number.isInteger(reps) || reps < 1 || reps > 999)) return `Проверь повторы: ${suffix}`;
+      const rpe = optionalNumber(setResult.rpe);
+      if (rpe !== null && (!Number.isFinite(rpe) || rpe < 1 || rpe > 10)) return `RPE должен быть от 1 до 10: ${suffix}`;
+    }
   }
   return '';
 }
@@ -195,7 +231,7 @@ function WorkoutEditorContent({
   const isTemplateMode = mode === 'template';
   const [form, setForm] = useState(() => isTemplateMode
     ? initialTemplateForm(resolvedDate, template, defaultReminder)
-    : initialWorkoutForm(resolvedDate, workout, defaultReminder));
+    : initialWorkoutForm(resolvedDate, workout, defaultReminder, isResultMode));
   const [repeat, setRepeat] = useState(false);
   const [weekdays, setWeekdays] = useState(() => [getIsoWeekday(workout?.plannedDate ?? resolvedDate)]);
   const [intervalWeeks, setIntervalWeeks] = useState(1);
@@ -217,6 +253,20 @@ function WorkoutEditorContent({
     setForm((current) => ({
       ...current,
       exercises: current.exercises.map((item) => item.id === id ? { ...item, [field]: value } : item),
+    }));
+  };
+  const updateSetResult = (exerciseId, setNumber, field, value) => {
+    setError('');
+    setForm((current) => ({
+      ...current,
+      exercises: current.exercises.map((exercise) => exercise.id === exerciseId
+        ? {
+          ...exercise,
+          setResults: exercise.setResults.map((setResult) => (
+            setResult.setNumber === setNumber ? { ...setResult, [field]: value } : setResult
+          )),
+        }
+        : exercise),
     }));
   };
   const updatePlannedDate = (date) => {
@@ -299,6 +349,13 @@ function WorkoutEditorContent({
         : isRescheduleMode
           ? 'Перенести'
           : 'Сохранить';
+  const firstCompletedSetKey = useMemo(() => {
+    for (const exercise of form.exercises) {
+      const setResult = exercise.setResults?.find((item) => item.status === 'completed');
+      if (setResult) return `${exercise.id}:${setResult.setNumber}`;
+    }
+    return '';
+  }, [form.exercises]);
   const footer = (
     <>
       {!isResultMode && !isRescheduleMode && !isTemplateMode && <div className="points-preview">Можно получить <strong>+{pointsPreview}</strong></div>}
@@ -322,17 +379,46 @@ function WorkoutEditorContent({
         {isResultMode ? (
           <>
             <div className="result-editor-list">
-              {form.exercises.map((exercise, index) => (
-                <fieldset className="result-editor-row" key={exercise.id}>
-                  <legend>{exercise.name}</legend>
-                  <label className="field"><span>Выполнено подходов</span><input ref={index === 0 ? firstFieldRef : undefined} type="number" min="0" max={exercise.sets} step="1" value={exercise.completedSets} onChange={(event) => updateExercise(exercise.id, 'completedSets', event.target.value)} /></label>
-                  <label className="field"><span>Вес, кг</span><input type="number" min="0.5" max="1000" step="0.5" value={exercise.actualWeightKg} onChange={(event) => updateExercise(exercise.id, 'actualWeightKg', event.target.value)} /></label>
-                  <label className="field"><span>Повторы</span><input type="number" min="1" max="999" step="1" value={exercise.actualReps} onChange={(event) => updateExercise(exercise.id, 'actualReps', event.target.value)} /></label>
-                  <label className="field"><span>RPE</span><input type="number" min="1" max="10" step="0.5" value={exercise.rpe} onChange={(event) => updateExercise(exercise.id, 'rpe', event.target.value)} /></label>
-                </fieldset>
+              {form.exercises.map((exercise) => (
+                <section key={exercise.id} aria-labelledby={`result-exercise-${exercise.id}`}>
+                  <h3 id={`result-exercise-${exercise.id}`}>{exercise.name}</h3>
+                  {exercise.setResults.map((setResult) => {
+                    const completed = setResult.status === 'completed';
+                    const setKey = `${exercise.id}:${setResult.setNumber}`;
+                    const accessibleSuffix = `, ${exercise.name}, подход ${setResult.setNumber}`;
+                    return (
+                      <fieldset className="result-editor-row" key={setKey}>
+                        <legend>Подход {setResult.setNumber} · {SET_RESULT_LABELS[setResult.status]}</legend>
+                        <label className="field result-status-field">
+                          <span>Статус<span className="visually-hidden">{accessibleSuffix}</span></span>
+                          <select
+                            value={setResult.status}
+                            onChange={(event) => updateSetResult(exercise.id, setResult.setNumber, 'status', event.target.value)}
+                          >
+                            <option value="completed">Выполнен</option>
+                            <option value="skipped">Пропущен</option>
+                            <option value="pending">Не выполнен</option>
+                          </select>
+                        </label>
+                        <label className="field">
+                          <span>Вес, кг<span className="visually-hidden">{accessibleSuffix}</span></span>
+                          <input ref={setKey === firstCompletedSetKey ? firstFieldRef : undefined} type="number" min="0.5" max="1000" step="0.5" disabled={!completed} value={setResult.weightKg} onChange={(event) => updateSetResult(exercise.id, setResult.setNumber, 'weightKg', event.target.value)} />
+                        </label>
+                        <label className="field">
+                          <span>Повторы<span className="visually-hidden">{accessibleSuffix}</span></span>
+                          <input type="number" min="1" max="999" step="1" disabled={!completed} value={setResult.reps} onChange={(event) => updateSetResult(exercise.id, setResult.setNumber, 'reps', event.target.value)} />
+                        </label>
+                        <label className="field">
+                          <span>RPE<span className="visually-hidden">{accessibleSuffix}</span></span>
+                          <input type="number" min="1" max="10" step="0.5" disabled={!completed} value={setResult.rpe} onChange={(event) => updateSetResult(exercise.id, setResult.setNumber, 'rpe', event.target.value)} />
+                        </label>
+                      </fieldset>
+                    );
+                  })}
+                </section>
               ))}
             </div>
-            <label className="field full"><span>Итоговая заметка</span><textarea value={form.resultNotes} onChange={(event) => update('resultNotes', event.target.value)} maxLength="2000" /></label>
+            <label className="field full"><span>Итоговая заметка</span><textarea ref={!firstCompletedSetKey ? firstFieldRef : undefined} value={form.resultNotes} onChange={(event) => update('resultNotes', event.target.value)} maxLength="2000" /></label>
           </>
         ) : isRescheduleMode ? (
           <div className="form-grid">

@@ -10,13 +10,23 @@ function sequentialIds() {
 }
 
 describe('appReducer', () => {
-  it('updates one aggregate exercise result while planned', () => {
+  it('updates only the selected per-set result and preserves note whitespace', () => {
     const workout = normalizeWorkout({
       id: 'w',
       title: 'Тест',
       status: 'planned',
       plannedDate: '2026-07-13',
-      exercises: [{ id: 'e', name: 'Жим', sets: 3, plannedReps: '10' }],
+      exercises: [{
+        id: 'e',
+        name: 'Жим',
+        sets: 3,
+        plannedReps: '10',
+        setResults: [
+          { status: 'completed', weightKg: 70, reps: 10, rpe: 7 },
+          { status: 'completed', weightKg: 75, reps: 8, rpe: 8 },
+          { status: 'skipped' },
+        ],
+      }],
     });
     const state = { ...createEmptyAppState(), workouts: [workout] };
     const next = appReducer(state, {
@@ -24,22 +34,29 @@ describe('appReducer', () => {
       payload: {
         workoutId: 'w',
         result: {
-          resultNotes: 'Черновик',
-          exercises: [{ id: 'e', completedSets: 2, actualWeightKg: 75, actualReps: 8, rpe: 8.5 }],
+          resultNotes: 'Черновик ',
+          exercises: [{
+            id: 'e', setIndex: 1, actualWeightKg: 77.5, actualReps: 7, rpe: 8.5,
+          }],
         },
       },
     });
 
+    expect(next.workouts[0].exercises[0].setResults).toEqual([
+      expect.objectContaining({ status: 'completed', weightKg: 70, reps: 10, rpe: 7 }),
+      expect.objectContaining({ status: 'completed', weightKg: 77.5, reps: 7, rpe: 8.5 }),
+      expect.objectContaining({ status: 'skipped', weightKg: null, reps: null, rpe: null }),
+    ]);
     expect(next.workouts[0].exercises[0]).toMatchObject({
       name: 'Жим',
       sets: 3,
       plannedReps: '10',
       completedSets: 2,
-      actualWeightKg: 75,
-      actualReps: 8,
+      actualWeightKg: 77.5,
+      actualReps: 7,
       rpe: 8.5,
     });
-    expect(next.workouts[0].resultNotes).toBe('Черновик');
+    expect(next.workouts[0].resultNotes).toBe('Черновик ');
   });
 
   it('atomically marks the next set and starts rest without exceeding the plan', () => {
@@ -79,7 +96,7 @@ describe('appReducer', () => {
     });
   });
 
-  it('does not mark a set or start rest for invalid targets and disabled rest', () => {
+  it('rejects invalid rest targets and still marks a set when rest is disabled', () => {
     const completed = normalizeWorkout({
       id: 'completed-workout',
       status: 'completed',
@@ -103,10 +120,230 @@ describe('appReducer', () => {
       type: ActionTypes.WORKOUT_START_REST,
       payload: { workoutId: 'planned-workout', exerciseId: 'missing' },
     })).toBe(state);
-    expect(appReducer(state, {
+    const withoutRest = appReducer(state, {
       type: ActionTypes.WORKOUT_START_REST,
-      payload: { workoutId: 'planned-workout', exerciseId: 'plank' },
+      payload: {
+        workoutId: 'planned-workout',
+        exerciseId: 'plank',
+        now: '2026-07-13T10:00:00.000Z',
+      },
+    });
+    expect(withoutRest.workouts[1].exercises[0].completedSets).toBe(1);
+    expect(withoutRest.activeTimer).toBeNull();
+  });
+
+  it('runs active-session set completion atomically and idempotently', () => {
+    const workout = normalizeWorkout({
+      id: 'session',
+      status: 'planned',
+      plannedDate: '2026-07-13',
+      exercises: [{ id: 'press', name: 'Жим', sets: 2, restSeconds: 90 }],
+    });
+    let state = { ...createEmptyAppState(), workouts: [workout] };
+    state = appReducer(state, {
+      type: ActionTypes.WORKOUT_SESSION_START,
+      payload: { workoutId: 'session', now: '2026-07-13T10:00:00.000Z' },
+    });
+    state = appReducer(state, {
+      type: ActionTypes.WORKOUT_COMPLETE_SET,
+      payload: {
+        workoutId: 'session',
+        exerciseId: 'press',
+        setIndex: 0,
+        result: { weightKg: 80, reps: 8, rpe: 8 },
+        now: '2026-07-13T10:01:00.000Z',
+      },
+    });
+    const afterFirst = state;
+    state = appReducer(state, {
+      type: ActionTypes.WORKOUT_COMPLETE_SET,
+      payload: {
+        workoutId: 'session',
+        exerciseId: 'press',
+        setIndex: 0,
+        result: { weightKg: 100, reps: 1 },
+        now: '2026-07-13T10:02:00.000Z',
+      },
+    });
+
+    expect(afterFirst.workouts[0]).toMatchObject({
+      startedAt: '2026-07-13T10:00:00.000Z',
+      exercises: [{ completedSets: 1, actualWeightKg: 80, actualReps: 8 }],
+    });
+    expect(afterFirst.activeTimer.endsAt).toBe('2026-07-13T10:02:30.000Z');
+    expect(state).toBe(afterFirst);
+  });
+
+  it('completes a set with rest zero and rejects invalid set values', () => {
+    const workout = normalizeWorkout({
+      id: 'session-zero',
+      status: 'planned',
+      plannedDate: '2026-07-13',
+      exercises: [{ id: 'plank', name: 'Планка', sets: 1, restSeconds: 0 }],
+    });
+    const state = { ...createEmptyAppState(), workouts: [workout] };
+    const invalid = appReducer(state, {
+      type: ActionTypes.WORKOUT_COMPLETE_SET,
+      payload: {
+        workoutId: 'session-zero',
+        exerciseId: 'plank',
+        setIndex: 0,
+        result: { reps: 0 },
+        now: '2026-07-13T10:00:00.000Z',
+      },
+    });
+    const completed = appReducer(state, {
+      type: ActionTypes.WORKOUT_COMPLETE_SET,
+      payload: {
+        workoutId: 'session-zero',
+        exerciseId: 'plank',
+        setIndex: 0,
+        result: { reps: 45 },
+        now: '2026-07-13T10:00:00.000Z',
+      },
+    });
+    expect(invalid).toBe(state);
+    expect(completed.workouts[0].exercises[0].completedSets).toBe(1);
+    expect(completed.activeTimer).toBeNull();
+  });
+
+  it('corrects a skipped set without starting rest when skipRest is requested', () => {
+    const workout = normalizeWorkout({
+      id: 'session-correction',
+      status: 'planned',
+      plannedDate: '2026-07-13',
+      exercises: [{
+        id: 'press',
+        name: 'Жим',
+        sets: 1,
+        restSeconds: 90,
+        setResults: [{ status: 'skipped' }],
+      }],
+    });
+    const state = { ...createEmptyAppState(), workouts: [workout] };
+    const corrected = appReducer(state, {
+      type: ActionTypes.WORKOUT_COMPLETE_SET,
+      payload: {
+        workoutId: 'session-correction',
+        exerciseId: 'press',
+        setIndex: 0,
+        result: { weightKg: 80, reps: 8, rpe: 8 },
+        now: '2026-07-13T10:00:00.000Z',
+        skipRest: true,
+      },
+    });
+
+    expect(corrected.workouts[0].exercises[0]).toMatchObject({
+      completedSets: 1,
+      actualWeightKg: 80,
+      actualReps: 8,
+    });
+    expect(corrected.workouts[0].exercises[0].setResults[0].status).toBe('completed');
+    expect(corrected.activeTimer).toBeNull();
+  });
+
+  it('skips pending sets, requires resolved session results, and finishes timer separately', () => {
+    const workout = normalizeWorkout({
+      id: 'session-skip',
+      status: 'planned',
+      plannedDate: '2026-07-13',
+      exercises: [{ id: 'row', name: 'Тяга', sets: 2 }],
+    });
+    let state = { ...createEmptyAppState(), workouts: [workout] };
+    const rejected = appReducer(state, {
+      type: ActionTypes.WORKOUT_COMPLETE,
+      payload: {
+        workoutId: 'session-skip',
+        completedAt: '2026-07-13T10:00:00.000Z',
+        requireResolvedSets: true,
+      },
+    });
+    expect(rejected).toBe(state);
+
+    state = appReducer(state, {
+      type: ActionTypes.WORKOUT_SKIP_EXERCISE,
+      payload: { workoutId: 'session-skip', exerciseId: 'row' },
+    });
+    state = appReducer(state, {
+      type: ActionTypes.WORKOUT_COMPLETE,
+      payload: {
+        workoutId: 'session-skip',
+        completedAt: '2026-07-13T10:00:00.000Z',
+        requireResolvedSets: true,
+      },
+    });
+    expect(state.workouts[0].status).toBe('completed');
+
+    const withTimer = {
+      ...state,
+      activeTimer: {
+        status: 'running',
+        endsAt: '2026-07-13T10:01:00.000Z',
+        remainingSeconds: null,
+        initialSeconds: 60,
+        workoutId: 'session-skip',
+        exerciseId: 'row',
+      },
+    };
+    expect(appReducer(withTimer, { type: ActionTypes.TIMER_FINISH }).activeTimer).toBeNull();
+  });
+
+  it('does not start a future workout session', () => {
+    const workout = normalizeWorkout({
+      id: 'future-session',
+      status: 'planned',
+      plannedDate: '2026-07-14',
+      exercises: [],
+    });
+    const state = { ...createEmptyAppState(), workouts: [workout] };
+    expect(appReducer(state, {
+      type: ActionTypes.WORKOUT_SESSION_START,
+      payload: { workoutId: 'future-session', now: '2026-07-13T10:00:00.000Z' },
     })).toBe(state);
+  });
+
+  it('clears linked timers on replacement and workout deletion but keeps standalone timers', () => {
+    const workout = normalizeWorkout({
+      id: 'timer-workout',
+      status: 'planned',
+      plannedDate: '2026-07-13',
+      exercises: [{ id: 'press', name: 'Жим', sets: 1 }],
+    });
+    const linkedTimer = {
+      status: 'running',
+      endsAt: '2026-07-13T10:01:30.000Z',
+      remainingSeconds: null,
+      initialSeconds: 90,
+      workoutId: 'timer-workout',
+      exerciseId: 'press',
+    };
+    const state = { ...createEmptyAppState(), workouts: [workout], activeTimer: linkedTimer };
+
+    const deleted = appReducer(state, {
+      type: ActionTypes.WORKOUT_DELETE,
+      payload: { workoutId: 'timer-workout' },
+    });
+    expect(deleted.activeTimer).toBeNull();
+
+    const replaced = appReducer(state, {
+      type: ActionTypes.REPLACE_STATE,
+      payload: {
+        state: {
+          ...state,
+          activeTimer: { ...linkedTimer, exerciseId: 'missing' },
+        },
+      },
+    });
+    expect(replaced.activeTimer).toBeNull();
+
+    const standalone = appReducer({
+      ...state,
+      activeTimer: { ...linkedTimer, workoutId: null, exerciseId: null },
+    }, {
+      type: ActionTypes.WORKOUT_DELETE,
+      payload: { workoutId: 'timer-workout' },
+    });
+    expect(standalone.activeTimer).toMatchObject({ workoutId: null, exerciseId: null });
   });
 
   it('rejects future completion and permits late completion without moving plannedDate', () => {

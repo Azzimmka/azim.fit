@@ -12,9 +12,14 @@ export function calculatePlanPoints(exercises = []) {
   return BASE_WORKOUT_POINTS + sets * POINTS_PER_SET;
 }
 
-/** @param {Array<{completedSets?: number}>} exercises */
+/** @param {Array<{completedSets?: number, setResults?: Array<{status?: string}>}>} exercises */
 export function calculateAwardedPoints(exercises = []) {
-  const sets = exercises.reduce((sum, exercise) => sum + toSetCount(exercise?.completedSets), 0);
+  const sets = exercises.reduce((sum, exercise) => {
+    if (Array.isArray(exercise?.setResults)) {
+      return sum + exercise.setResults.filter((result) => result?.status === 'completed').length;
+    }
+    return sum + toSetCount(exercise?.completedSets);
+  }, 0);
   return BASE_WORKOUT_POINTS + sets * POINTS_PER_SET;
 }
 
@@ -33,4 +38,3 @@ export const POINTS_FORMULA = Object.freeze({
   base: BASE_WORKOUT_POINTS,
   perSet: POINTS_PER_SET,
 });
-

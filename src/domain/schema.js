@@ -15,11 +15,12 @@ import {
   DEFAULT_SERIES_WEEKS,
   MAX_EXERCISE_SETS,
   SCHEMA_VERSION,
+  SET_RESULT_STATUSES,
   WORKOUT_STATUSES,
 } from './model.js';
 import { calculateAwardedPoints } from './points.js';
 import { normalizeReminder } from './reminders.js';
-import { normalizeActiveTimer, normalizeRestSeconds } from './timer.js';
+import { normalizeActiveTimerForWorkouts, normalizeRestSeconds } from './timer.js';
 
 function isRecord(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -46,7 +47,25 @@ function toPositiveNumberOrNull(value) {
   return Number.isFinite(number) && number > 0 ? number : null;
 }
 
+function toWeightOrNull(value) {
+  const number = toPositiveNumberOrNull(value);
+  return number !== null && number >= 0.5 && number <= 1_000 ? number : null;
+}
+
+function toRepsOrNull(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const number = Number(value);
+  return Number.isInteger(number) && number >= 1 && number <= 999 ? number : null;
+}
+
+function toRpeOrNull(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 1 && number <= 10 ? number : null;
+}
+
 function toIsoTimestamp(value, fallback = null) {
+  if (value === null || value === undefined || value === '') return fallback;
   const timestamp = new Date(value).getTime();
   return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : fallback;
 }
@@ -63,7 +82,44 @@ function ensureUniqueIds(items, prefix, idFactory) {
 
 /**
  * @param {unknown} input
- * @param {{idFactory?: (prefix?: string) => string, planningOnly?: boolean}} options
+ * @param {number} setNumber
+ * @param {{completedAt?: string|null, forcePending?: boolean}} options
+ * @returns {import('./model.js').SetResult}
+ */
+export function normalizeSetResult(input, setNumber, options = {}) {
+  const source = isRecord(input) ? input : {};
+  const status = options.forcePending === true
+    ? 'pending'
+    : (SET_RESULT_STATUSES.includes(source.status) ? source.status : 'pending');
+  const keepValues = status !== 'skipped';
+
+  return {
+    setNumber,
+    status,
+    weightKg: keepValues ? toWeightOrNull(source.weightKg ?? source.actualWeightKg) : null,
+    reps: keepValues ? toRepsOrNull(source.reps ?? source.actualReps) : null,
+    rpe: keepValues ? toRpeOrNull(source.rpe) : null,
+    completedAt: status === 'completed'
+      ? toIsoTimestamp(source.completedAt, options.completedAt ?? null)
+      : null,
+  };
+}
+
+/** @param {import('./model.js').SetResult[]} setResults */
+function aggregateSetResults(setResults) {
+  const completed = setResults.filter((result) => result.status === 'completed');
+  const lastCompleted = completed.at(-1) ?? null;
+  return {
+    completedSets: completed.length,
+    actualWeightKg: lastCompleted?.weightKg ?? null,
+    actualReps: lastCompleted?.reps ?? null,
+    rpe: lastCompleted?.rpe ?? null,
+  };
+}
+
+/**
+ * @param {unknown} input
+ * @param {{idFactory?: (prefix?: string) => string, planningOnly?: boolean, completedAt?: string|null}} options
  * @returns {import('./model.js').Exercise}
  */
 export function normalizeExercise(input, options = {}) {
@@ -72,31 +128,49 @@ export function normalizeExercise(input, options = {}) {
   const plannedRepsValue = source.plannedReps ?? source.reps ?? '10';
   const plannedReps = String(plannedRepsValue ?? '').trim() || '10';
   const planningOnly = options.planningOnly === true;
+  let setResults;
+
+  if (planningOnly) {
+    setResults = Array.from({ length: sets }, (_, index) => normalizeSetResult(
+      null,
+      index + 1,
+      { forcePending: true },
+    ));
+  } else if (Array.isArray(source.setResults)) {
+    setResults = Array.from({ length: sets }, (_, index) => normalizeSetResult(
+      source.setResults[index],
+      index + 1,
+      { completedAt: options.completedAt ?? null },
+    ));
+  } else {
+    const completedSets = toBoundedInteger(source.completedSets, 0, 0, sets);
+    const legacyResult = {
+      weightKg: toWeightOrNull(source.actualWeightKg),
+      reps: toRepsOrNull(source.actualReps),
+      rpe: toRpeOrNull(source.rpe),
+    };
+    setResults = Array.from({ length: sets }, (_, index) => normalizeSetResult(
+      index < completedSets
+        ? { ...legacyResult, status: 'completed' }
+        : { status: 'pending' },
+      index + 1,
+      { completedAt: options.completedAt ?? null },
+    ));
+  }
+
+  const aggregates = aggregateSetResults(setResults);
 
   return {
     id: toText(source.id) || makeId(options.idFactory, 'exercise'),
     name: toText(source.name, 'Упражнение') || 'Упражнение',
     sets,
     plannedReps,
-    plannedWeightKg: toPositiveNumberOrNull(
+    plannedWeightKg: toWeightOrNull(
       source.plannedWeightKg ?? source.weightKg ?? source.weight,
     ),
     restSeconds: normalizeRestSeconds(source.restSeconds, DEFAULT_REST_SECONDS),
-    completedSets: planningOnly
-      ? 0
-      : toBoundedInteger(source.completedSets, 0, 0, sets),
-    actualWeightKg: planningOnly
-      ? null
-      : toPositiveNumberOrNull(source.actualWeightKg),
-    actualReps: planningOnly
-      ? null
-      : toPositiveNumberOrNull(source.actualReps),
-    rpe: planningOnly
-      ? null
-      : (() => {
-        const rpe = Number(source.rpe);
-        return Number.isFinite(rpe) && rpe >= 1 && rpe <= 10 ? rpe : null;
-      })(),
+    ...aggregates,
+    setResults,
   };
 }
 
@@ -152,19 +226,22 @@ export function normalizeWorkout(input, options = {}) {
   const occurrenceDate = isCalendarDate(occurrenceCandidate) ? occurrenceCandidate : plannedDate;
   const inferredStatus = source.completed === true ? 'completed' : 'planned';
   const status = WORKOUT_STATUSES.includes(source.status) ? source.status : inferredStatus;
-  const exercises = ensureUniqueIds(
-    (Array.isArray(source.exercises) ? source.exercises : []).map((exercise) => normalizeExercise(
-      exercise,
-      { idFactory: options.idFactory },
-    )),
-    'exercise',
-    options.idFactory,
-  );
   const time = normalizeClockTime(source.time, '18:00');
   const fallbackCompletionTimestamp = localDateTimeToTimestamp(plannedDate, time);
   const fallbackCompletedAt = Number.isFinite(fallbackCompletionTimestamp)
     ? new Date(fallbackCompletionTimestamp).toISOString()
     : new Date().toISOString();
+  const completedAt = status === 'completed'
+    ? toIsoTimestamp(source.completedAt, fallbackCompletedAt)
+    : null;
+  const exercises = ensureUniqueIds(
+    (Array.isArray(source.exercises) ? source.exercises : []).map((exercise) => normalizeExercise(
+      exercise,
+      { idFactory: options.idFactory, completedAt },
+    )),
+    'exercise',
+    options.idFactory,
+  );
   const inputPoints = Number(source.pointsAwarded ?? source.points);
   const pointsAwarded = status === 'completed'
     ? (Number.isFinite(inputPoints) && inputPoints >= 0
@@ -189,9 +266,8 @@ export function normalizeWorkout(input, options = {}) {
     intensity: toText(source.intensity, 'Средняя') || 'Средняя',
     planNotes: toText(source.planNotes ?? source.notes),
     resultNotes: toText(source.resultNotes),
-    completedAt: status === 'completed'
-      ? toIsoTimestamp(source.completedAt, fallbackCompletedAt)
-      : null,
+    startedAt: toIsoTimestamp(source.startedAt, null),
+    completedAt,
     reminder: normalizeReminder(source.reminder, null),
     seriesId: toNullableId(source.seriesId),
     sourceTemplateId: toNullableId(source.sourceTemplateId),
@@ -347,7 +423,7 @@ export function normalizeAppState(input, options = {}) {
     templates,
     bodyWeightEntries: [...bodyWeightByDate.values()].sort((left, right) => left.date.localeCompare(right.date)),
     settings,
-    activeTimer: normalizeActiveTimer(input.activeTimer),
+    activeTimer: normalizeActiveTimerForWorkouts(input.activeTimer, workouts),
   };
 }
 
@@ -399,4 +475,3 @@ export function migrateV1State(input, options = {}) {
 export const createInitialState = createEmptyAppState;
 export const normalizeState = normalizeAppState;
 export const migrateV1ToV2 = migrateV1State;
-

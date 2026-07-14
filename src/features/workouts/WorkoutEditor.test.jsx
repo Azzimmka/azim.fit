@@ -91,7 +91,7 @@ describe('WorkoutEditor', () => {
     }, null);
   });
 
-  it('submits only correctable result fields in result mode', async () => {
+  it('submits distinct per-set results and preserves completion timestamps', async () => {
     const user = userEvent.setup();
     const onSubmit = vi.fn();
     const workout = {
@@ -105,6 +105,7 @@ describe('WorkoutEditor', () => {
       intensity: 'Средняя',
       planNotes: '',
       resultNotes: 'Хорошо',
+      completedAt: '2026-07-12T16:45:00.000Z',
       reminder: null,
       exercises: [{
         id: 'exercise-1',
@@ -113,9 +114,82 @@ describe('WorkoutEditor', () => {
         plannedReps: '8',
         plannedWeightKg: 80,
         restSeconds: 90,
+        setResults: [
+          { setNumber: 1, status: 'completed', weightKg: 82.5, reps: 8, rpe: 7, completedAt: '2026-07-12T16:10:00.000Z' },
+          { setNumber: 2, status: 'completed', weightKg: 85, reps: 6, rpe: 9, completedAt: '2026-07-12T16:15:00.000Z' },
+          { setNumber: 3, status: 'skipped', weightKg: null, reps: null, rpe: null, completedAt: null },
+        ],
+      }],
+    };
+
+    render(
+      <WorkoutEditor
+        open
+        mode="result"
+        initialDate="2026-07-13"
+        workout={workout}
+        onClose={() => {}}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    expect(screen.getByText('Подход 1 · Выполнен')).toBeInTheDocument();
+    expect(screen.getByText('Подход 3 · Пропущен')).toBeInTheDocument();
+    const firstWeight = screen.getByLabelText('Вес, кг, Тяга, подход 1');
+    expect(firstWeight).toHaveValue(82.5);
+    await user.clear(firstWeight);
+    await user.type(firstWeight, '87.5');
+    expect(screen.getByLabelText('Вес, кг, Тяга, подход 2')).toHaveValue(85);
+    const thirdWeight = screen.getByLabelText('Вес, кг, Тяга, подход 3');
+    expect(thirdWeight).toBeDisabled();
+    await user.selectOptions(screen.getByLabelText('Статус, Тяга, подход 3'), 'completed');
+    expect(thirdWeight).toBeEnabled();
+    await user.type(thirdWeight, '80');
+    const firstRpe = screen.getByLabelText('RPE, Тяга, подход 1');
+    await user.clear(firstRpe);
+    await user.type(firstRpe, '11');
+    await user.click(screen.getByRole('button', { name: 'Сохранить' }));
+    expect(screen.getByRole('alert')).toHaveTextContent('RPE должен быть от 1 до 10: Тяга, подход 1.');
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    await user.clear(firstRpe);
+    await user.click(screen.getByRole('button', { name: 'Сохранить' }));
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(onSubmit).toHaveBeenCalledOnce();
+    const [payload] = onSubmit.mock.calls[0];
+    expect(payload).toEqual({
+      resultNotes: 'Хорошо',
+      exercises: [{
+        id: 'exercise-1',
+        setResults: [
+          { setNumber: 1, status: 'completed', weightKg: 87.5, reps: 8, rpe: null, completedAt: '2026-07-12T16:10:00.000Z' },
+          { setNumber: 2, status: 'completed', weightKg: 85, reps: 6, rpe: 9, completedAt: '2026-07-12T16:15:00.000Z' },
+          { setNumber: 3, status: 'completed', weightKg: 80, reps: null, rpe: null, completedAt: null },
+        ],
+      }],
+    });
+    expect(payload).not.toHaveProperty('title');
+    expect(payload).not.toHaveProperty('plannedDate');
+  });
+
+  it('synthesizes per-set correction fields for a raw legacy workout', async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    const workout = {
+      id: 'legacy-workout',
+      title: 'Старая тренировка',
+      status: 'completed',
+      plannedDate: '2026-07-10',
+      completedAt: '2026-07-10T18:30:00.000Z',
+      resultNotes: '',
+      exercises: [{
+        id: 'legacy-exercise',
+        name: 'Жим',
+        sets: 3,
         completedSets: 2,
-        actualWeightKg: 85,
-        actualReps: 7,
+        actualWeightKg: 70,
+        actualReps: 10,
         rpe: 8,
       }],
     };
@@ -131,23 +205,14 @@ describe('WorkoutEditor', () => {
       />,
     );
 
-    const completedSets = screen.getByLabelText('Выполнено подходов');
-    await user.clear(completedSets);
-    await user.type(completedSets, '3');
+    expect(screen.getByLabelText('Вес, кг, Жим, подход 1')).toHaveValue(70);
+    expect(screen.getByLabelText('Вес, кг, Жим, подход 3')).toBeDisabled();
     await user.click(screen.getByRole('button', { name: 'Сохранить' }));
 
-    const [payload] = onSubmit.mock.calls[0];
-    expect(payload).toEqual({
-      resultNotes: 'Хорошо',
-      exercises: [{
-        id: 'exercise-1',
-        completedSets: 3,
-        actualWeightKg: 85,
-        actualReps: 7,
-        rpe: 8,
-      }],
-    });
-    expect(payload).not.toHaveProperty('title');
-    expect(payload).not.toHaveProperty('plannedDate');
+    expect(onSubmit.mock.calls[0][0].exercises[0].setResults).toEqual([
+      { setNumber: 1, status: 'completed', weightKg: 70, reps: 10, rpe: 8, completedAt: workout.completedAt },
+      { setNumber: 2, status: 'completed', weightKg: 70, reps: 10, rpe: 8, completedAt: workout.completedAt },
+      { setNumber: 3, status: 'pending', weightKg: null, reps: null, rpe: null, completedAt: null },
+    ]);
   });
 });

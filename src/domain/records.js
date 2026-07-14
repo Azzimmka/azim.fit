@@ -28,6 +28,21 @@ function replaceIfStrictlyGreater(current, value, workout, exercise) {
   return createRecord(value, workout, exercise);
 }
 
+function getCompletedSetResults(exercise) {
+  if (Array.isArray(exercise?.setResults)) {
+    return exercise.setResults.filter((result) => result?.status === 'completed');
+  }
+  const completedSets = Math.max(0, Math.trunc(Number(exercise?.completedSets) || 0));
+  return Array.from({ length: completedSets }, (_, index) => ({
+    setNumber: index + 1,
+    status: 'completed',
+    weightKg: exercise.actualWeightKg ?? null,
+    reps: exercise.actualReps ?? null,
+    rpe: exercise.rpe ?? null,
+    completedAt: null,
+  }));
+}
+
 /**
  * Recomputes PRs entirely from current completed workouts, so deletion and
  * result correction need no special invalidation path. Equal values never
@@ -46,7 +61,8 @@ export function calculatePersonalRecords(workouts = []) {
   for (const workout of completed) {
     for (const exercise of workout.exercises ?? []) {
       const key = normalizeExerciseName(exercise.name);
-      if (!key || Number(exercise.completedSets) <= 0) continue;
+      const setResults = getCompletedSetResults(exercise);
+      if (!key || setResults.length === 0) continue;
       const record = byExercise.get(key) ?? {
         normalizedName: key,
         displayName: exercise.name.trim(),
@@ -54,22 +70,28 @@ export function calculatePersonalRecords(workouts = []) {
         volume: null,
         reps: null,
       };
-      const weight = Number(exercise.actualWeightKg);
-      const reps = Number(exercise.actualReps);
-      const sets = Number(exercise.completedSets);
+      const weightedSets = setResults.filter((result) => (
+        Number.isFinite(Number(result.weightKg)) && Number(result.weightKg) > 0
+      ));
 
-      if (Number.isFinite(weight) && weight > 0) {
-        record.weight = replaceIfStrictlyGreater(record.weight, weight, workout, exercise);
-        if (Number.isFinite(reps) && reps > 0 && Number.isFinite(sets) && sets > 0) {
-          record.volume = replaceIfStrictlyGreater(
-            record.volume,
-            weight * reps * sets,
-            workout,
-            exercise,
-          );
-        }
-      } else if (Number.isFinite(reps) && reps > 0) {
-        record.reps = replaceIfStrictlyGreater(record.reps, reps, workout, exercise);
+      if (weightedSets.length > 0) {
+        const maxWeight = Math.max(...weightedSets.map((result) => Number(result.weightKg)));
+        const volume = weightedSets.reduce((sum, result) => {
+          const reps = Number(result.reps);
+          return Number.isFinite(reps) && reps > 0
+            ? sum + Number(result.weightKg) * reps
+            : sum;
+        }, 0);
+        record.weight = replaceIfStrictlyGreater(record.weight, maxWeight, workout, exercise);
+        record.volume = replaceIfStrictlyGreater(record.volume, volume, workout, exercise);
+      } else {
+        const maxReps = Math.max(
+          0,
+          ...setResults.map((result) => Number(result.reps)).filter((reps) => (
+            Number.isFinite(reps) && reps > 0
+          )),
+        );
+        record.reps = replaceIfStrictlyGreater(record.reps, maxReps, workout, exercise);
       }
 
       byExercise.set(key, record);
@@ -116,4 +138,3 @@ export function findNewPersonalRecords(candidate, previousWorkouts = []) {
 }
 
 export const getPersonalRecords = calculatePersonalRecords;
-

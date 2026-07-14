@@ -2,7 +2,16 @@
  * Canonical runtime constants for the local-first V2 model.
  *
  * @typedef {'planned' | 'completed' | 'skipped'} WorkoutStatus
+ * @typedef {'pending' | 'completed' | 'skipped'} SetResultStatus
  * @typedef {null | 0 | 5 | 15 | 30 | 60} ReminderOffset
+ *
+ * @typedef {Object} SetResult
+ * @property {number} setNumber One-based position within the exercise.
+ * @property {SetResultStatus} status
+ * @property {number|null} weightKg
+ * @property {number|null} reps
+ * @property {number|null} rpe
+ * @property {string|null} completedAt
  *
  * @typedef {Object} Exercise
  * @property {string} id
@@ -15,6 +24,7 @@
  * @property {number|null} actualWeightKg
  * @property {number|null} actualReps
  * @property {number|null} rpe
+ * @property {SetResult[]} setResults
  *
  * @typedef {Object} Workout
  * @property {string} id
@@ -28,6 +38,7 @@
  * @property {string} intensity
  * @property {string} planNotes
  * @property {string} resultNotes
+ * @property {string|null} startedAt ISO timestamp of the first active-session opening.
  * @property {string|null} completedAt ISO timestamp; only set when completed.
  * @property {ReminderOffset} reminder
  * @property {string|null} seriesId
@@ -91,6 +102,7 @@
 
 export const SCHEMA_VERSION = 2;
 export const WORKOUT_STATUSES = Object.freeze(['planned', 'completed', 'skipped']);
+export const SET_RESULT_STATUSES = Object.freeze(['pending', 'completed', 'skipped']);
 export const REMINDER_OFFSETS = Object.freeze([0, 5, 15, 30, 60]);
 export const DEFAULT_REMINDER = 15;
 export const DEFAULT_REST_SECONDS = 90;
@@ -105,4 +117,3 @@ export const DEFAULT_SETTINGS = Object.freeze({
   includeWorkoutTitleInNotifications: false,
   deliveredReminderKeys: Object.freeze([]),
 });
-
