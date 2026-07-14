@@ -532,7 +532,6 @@ h3 {
 
 .secondary-button:hover:not(:disabled) {
   border-color: #c9cec7;
-  background: #fbfcfa;
   box-shadow: 0 8px 18px rgba(18, 29, 25, 0.06);
 }
 
@@ -2482,7 +2481,7 @@ h3 {
 .scope-option:hover,
 .scope-option.active {
   border-color: #aaa4ff;
-  background: #f7f6ff;
+
 }
 
 .scope-option input {
