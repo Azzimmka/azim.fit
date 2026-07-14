@@ -32,6 +32,22 @@ const workout = {
 };
 
 describe('WorkoutCard', () => {
+  it('starts rest for the selected workout and exercise with one button press', async () => {
+    const user = userEvent.setup();
+    const onStartTimer = vi.fn();
+
+    render(
+      <WorkoutCard
+        workout={workout}
+        today="2026-07-13"
+        onStartTimer={onStartTimer}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: '90 сек' }));
+    expect(onStartTimer).toHaveBeenCalledWith(workout, workout.exercises[0]);
+  });
+
   it('exposes the draft result note only through its dedicated callback', async () => {
     const user = userEvent.setup();
     const onUpdateResultNotes = vi.fn();

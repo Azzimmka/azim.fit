@@ -35,6 +35,8 @@ import { PlanPage } from './features/plan/PlanPage.jsx';
 import { ProgressPage } from './features/progress/ProgressPage.jsx';
 import { SettingsPage } from './features/settings/SettingsPage.jsx';
 import { TodayPage } from './features/today/TodayPage.jsx';
+import { prepareTimerSound } from './features/timer/timerSound.js';
+import { useTimerCompletionSound } from './features/timer/useTimerCompletionSound.js';
 import { WorkoutCard } from './features/workouts/WorkoutCard.jsx';
 import { WorkoutEditor } from './features/workouts/WorkoutEditor.jsx';
 import { PwaInstallPrompt, PwaUpdatePrompt, requestPersistentStorage } from './pwa/index.js';
@@ -517,10 +519,16 @@ export default function App() {
       type: ActionTypes.WORKOUT_UPDATE_RESULT,
       payload: { workoutId, result: { resultNotes } },
     }),
-    onStartTimer: (workout, exercise) => dispatch({
-      type: ActionTypes.TIMER_START,
-      payload: { seconds: exercise.restSeconds, workoutId: workout.id, exerciseId: exercise.id },
-    }),
+    onStartTimer: (workout, exercise) => {
+      void prepareTimerSound();
+      dispatch({
+        type: ActionTypes.WORKOUT_START_REST,
+        payload: {
+          workoutId: workout.id,
+          exerciseId: exercise.id,
+        },
+      });
+    },
   };
 
   const templateActions = {
@@ -537,6 +545,7 @@ export default function App() {
   };
 
   const timerSnapshot = getTimerSnapshot(state.activeTimer);
+  useTimerCompletionSound(timerSnapshot);
   const timerWorkout = state.workouts.find((workout) => workout.id === timerSnapshot.workoutId);
   const timerExercise = timerWorkout?.exercises.find((exercise) => exercise.id === timerSnapshot.exerciseId);
   const notificationControl = (

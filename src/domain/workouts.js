@@ -131,6 +131,32 @@ export function toggleWorkoutSet(workout, exerciseId, index) {
 }
 
 /**
+ * Marks exactly one next set for an exercise. The aggregate result is capped
+ * at the planned set count, so starting another rest after the last set only
+ * restarts the timer.
+ * @param {import('./model.js').Workout} workout
+ * @param {string} exerciseId
+ */
+export function completeNextWorkoutSet(workout, exerciseId) {
+  if (workout?.status !== 'planned') return workout;
+
+  let changed = false;
+  const exercises = workout.exercises.map((exercise) => {
+    if (exercise.id !== exerciseId) return exercise;
+    const plannedSets = Math.max(0, Math.trunc(Number(exercise.sets) || 0));
+    const completedSets = Math.min(
+      plannedSets,
+      Math.max(0, Math.trunc(Number(exercise.completedSets) || 0)),
+    );
+    if (completedSets >= plannedSets) return exercise;
+    changed = true;
+    return { ...exercise, completedSets: completedSets + 1 };
+  });
+
+  return changed ? { ...workout, exercises } : workout;
+}
+
+/**
  * Stores aggregate in-progress results before completion. Plan fields remain
  * untouched and there is still exactly one result value per exercise.
  * @param {import('./model.js').Workout} workout

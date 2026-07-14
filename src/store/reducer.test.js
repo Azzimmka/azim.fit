@@ -42,6 +42,73 @@ describe('appReducer', () => {
     expect(next.workouts[0].resultNotes).toBe('Черновик');
   });
 
+  it('atomically marks the next set and starts rest without exceeding the plan', () => {
+    const workout = normalizeWorkout({
+      id: 'rest-workout',
+      title: 'Ноги',
+      status: 'planned',
+      plannedDate: '2026-07-13',
+      exercises: [{
+        id: 'squat',
+        name: 'Приседания',
+        sets: 3,
+        completedSets: 0,
+        restSeconds: 90,
+      }],
+    });
+    let state = { ...createEmptyAppState(), workouts: [workout] };
+
+    for (let completedSets = 1; completedSets <= 4; completedSets += 1) {
+      state = appReducer(state, {
+        type: ActionTypes.WORKOUT_START_REST,
+        payload: {
+          workoutId: 'rest-workout',
+          exerciseId: 'squat',
+          now: `2026-07-13T10:0${completedSets}:00.000Z`,
+        },
+      });
+      expect(state.workouts[0].exercises[0].completedSets).toBe(Math.min(completedSets, 3));
+    }
+
+    expect(state.activeTimer).toMatchObject({
+      status: 'running',
+      initialSeconds: 90,
+      workoutId: 'rest-workout',
+      exerciseId: 'squat',
+      endsAt: '2026-07-13T10:05:30.000Z',
+    });
+  });
+
+  it('does not mark a set or start rest for invalid targets and disabled rest', () => {
+    const completed = normalizeWorkout({
+      id: 'completed-workout',
+      status: 'completed',
+      plannedDate: '2026-07-13',
+      completedAt: '2026-07-13T09:00:00.000Z',
+      exercises: [{ id: 'press', name: 'Жим', sets: 3, completedSets: 3, restSeconds: 90 }],
+    });
+    const planned = normalizeWorkout({
+      id: 'planned-workout',
+      status: 'planned',
+      plannedDate: '2026-07-13',
+      exercises: [{ id: 'plank', name: 'Планка', sets: 3, completedSets: 0, restSeconds: 0 }],
+    });
+    const state = { ...createEmptyAppState(), workouts: [completed, planned] };
+
+    expect(appReducer(state, {
+      type: ActionTypes.WORKOUT_START_REST,
+      payload: { workoutId: 'completed-workout', exerciseId: 'press' },
+    })).toBe(state);
+    expect(appReducer(state, {
+      type: ActionTypes.WORKOUT_START_REST,
+      payload: { workoutId: 'planned-workout', exerciseId: 'missing' },
+    })).toBe(state);
+    expect(appReducer(state, {
+      type: ActionTypes.WORKOUT_START_REST,
+      payload: { workoutId: 'planned-workout', exerciseId: 'plank' },
+    })).toBe(state);
+  });
+
   it('rejects future completion and permits late completion without moving plannedDate', () => {
     const future = normalizeWorkout({
       id: 'future',
@@ -119,4 +186,3 @@ describe('appReducer', () => {
     expect(restored.workouts).toEqual(before.workouts);
   });
 });
-

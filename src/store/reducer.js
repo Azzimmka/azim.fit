@@ -23,6 +23,7 @@ import {
 } from '../domain/timer.js';
 import {
   applyTemplate,
+  completeNextWorkoutSet,
   completeWorkout,
   correctWorkoutResult,
   duplicateWorkout,
@@ -61,6 +62,7 @@ export const ActionTypes = Object.freeze({
   SETTINGS_UPDATE: 'settings/update',
   REMINDER_MARK_DELIVERED: 'reminder/mark-delivered',
   REMINDER_PRUNE: 'reminder/prune',
+  WORKOUT_START_REST: 'workout/start-rest',
   TIMER_START: 'timer/start',
   TIMER_PAUSE: 'timer/pause',
   TIMER_RESUME: 'timer/resume',
@@ -339,6 +341,32 @@ export function appReducer(currentState, action) {
           ),
         },
       };
+
+    case ActionTypes.WORKOUT_START_REST: {
+      const workoutId = payload.workoutId ?? payload.id;
+      const target = state.workouts.find((workout) => workout.id === workoutId);
+      if (!target || target.status !== 'planned') return state;
+
+      const exercise = target.exercises.find((item) => item.id === payload.exerciseId);
+      if (!exercise) return state;
+
+      const activeTimer = startRestTimer(exercise.restSeconds, {
+        ...payload,
+        workoutId,
+        exerciseId: exercise.id,
+      });
+      if (!activeTimer) return state;
+
+      const nextWorkout = completeNextWorkoutSet(target, exercise.id);
+      const workouts = nextWorkout === target
+        ? state.workouts
+        : state.workouts.map((workout) => (workout.id === workoutId ? nextWorkout : workout));
+
+      return {
+        ...withWorkouts(state, workouts),
+        activeTimer,
+      };
+    }
 
     case ActionTypes.TIMER_START:
       return {

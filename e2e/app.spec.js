@@ -106,6 +106,59 @@ test('демо-шаблон создаёт независимую трениро
   expect(templateLinkage.sameExerciseReferenceIsImpossibleAfterSerialization).toBe(true);
 });
 
+test('запуск отдыха отмечает следующий подход и подаёт сигнал при завершении', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.__timerToneStarts = 0;
+    class TestAudioContext {
+      constructor() {
+        this.currentTime = 0;
+        this.destination = {};
+        this.state = 'suspended';
+      }
+
+      resume() {
+        this.state = 'running';
+        return Promise.resolve();
+      }
+
+      createOscillator() {
+        return {
+          type: 'sine',
+          frequency: { setValueAtTime() {} },
+          connect() {},
+          start() { window.__timerToneStarts += 1; },
+          stop() {},
+        };
+      }
+
+      createGain() {
+        return {
+          connect() {},
+          gain: {
+            setValueAtTime() {},
+            exponentialRampToValueAtTime() {},
+          },
+        };
+      }
+    }
+    Object.defineProperty(window, 'AudioContext', { configurable: true, value: TestAudioContext });
+  });
+  await page.clock.install();
+  await loadDemo(page);
+  await page.goto('/today');
+
+  const card = workoutCard(page, 'Верх тела');
+  const firstSet = card.locator('button.set-dot').first();
+  await card.getByRole('button', { name: '90 сек' }).first().click();
+
+  await expect(firstSet).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('.rest-timer-time')).toHaveText('01:30');
+
+  await page.clock.fastForward(90_500);
+  await expect(page.locator('.rest-timer-time')).toHaveText('00:00');
+  await expect.poll(() => page.evaluate(() => window.__timerToneStarts)).toBe(2);
+});
+
 test('можно создать серию и изменить только один её экземпляр', async ({ page }) => {
   await page.goto('/plan');
   await page.getByRole('button', { name: 'Запланировать', exact: true }).click();
