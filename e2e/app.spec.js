@@ -453,6 +453,16 @@ test('основные экраны и редактор не создают го
     await page.goto(path);
     await expect(page.locator('main')).toBeVisible();
     await expectNoHorizontalOverflow(page);
+
+    if (path === '/progress') {
+      const trackWidth = await page.locator('.bar-track').first().evaluate((track) => track.getBoundingClientRect().width);
+      if (testInfo.project.name === 'mobile') {
+        expect(trackWidth).toBeLessThanOrEqual(38.5);
+      } else {
+        expect(trackWidth).toBeGreaterThanOrEqual(80);
+        expect(trackWidth).toBeLessThanOrEqual(90.5);
+      }
+    }
   }
 
   if (testInfo.project.name === 'mobile') {

@@ -1790,6 +1790,18 @@ h3 {
   background: linear-gradient(180deg, var(--lime), #aadd3e);
 }
 
+@media (min-width: 821px) {
+  .bar-track {
+    width: min(90px, 88%);
+    max-width: none;
+    border-radius: 19px;
+  }
+
+  .bar-track span {
+    border-radius: 19px;
+  }
+}
+
 .bar-column .today-label {
   color: var(--ink);
 }
