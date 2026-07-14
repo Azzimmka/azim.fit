@@ -27,7 +27,7 @@ describe('localStorage adapter', () => {
     });
     const result = loadAppStateResult(storage);
     expect(result.source).toBe('v2');
-    expect(result.state.settings.defaultReminder).toBe(30);
+    expect(result.state.settings).toEqual({});
   });
 
   it('recovers a corrupt V2 value from V1 and never removes the V1 key', () => {
@@ -61,4 +61,3 @@ describe('localStorage adapter', () => {
     expect(saveAppState(createEmptyAppState(), storage)).toBe(false);
   });
 });
-

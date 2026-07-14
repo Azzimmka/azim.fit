@@ -5,12 +5,10 @@ import {
   materializeSeries,
   splitSeriesAndFollowing,
 } from '../domain/recurrence.js';
-import { pruneDeliveredReminderKeys } from '../domain/reminders.js';
 import {
   normalizeAppState,
   normalizeBodyWeightEntry,
   normalizeSeries,
-  normalizeSettings,
   normalizeTemplate,
   normalizeWorkout,
 } from '../domain/schema.js';
@@ -64,9 +62,6 @@ export const ActionTypes = Object.freeze({
   TEMPLATE_APPLY: 'template/apply',
   BODY_WEIGHT_UPSERT: 'body-weight/upsert',
   BODY_WEIGHT_DELETE: 'body-weight/delete',
-  SETTINGS_UPDATE: 'settings/update',
-  REMINDER_MARK_DELIVERED: 'reminder/mark-delivered',
-  REMINDER_PRUNE: 'reminder/prune',
   WORKOUT_START_REST: 'workout/start-rest',
   WORKOUT_SESSION_START: 'workout/session-start',
   WORKOUT_START_SESSION: 'workout/session-start',
@@ -105,13 +100,6 @@ function withWorkouts(state, workouts) {
     ...state,
     workouts,
     activeTimer: normalizeActiveTimerForWorkouts(state.activeTimer, workouts),
-    settings: {
-      ...state.settings,
-      deliveredReminderKeys: pruneDeliveredReminderKeys(
-        state.settings.deliveredReminderKeys,
-        workouts,
-      ),
-    },
   };
 }
 
@@ -324,38 +312,6 @@ export function appReducer(currentState, action) {
         bodyWeightEntries: state.bodyWeightEntries.filter((entry) => entry.date !== date),
       };
     }
-
-    case ActionTypes.SETTINGS_UPDATE:
-      return {
-        ...state,
-        settings: normalizeSettings({ ...state.settings, ...(payload.patch ?? payload) }),
-      };
-
-    case ActionTypes.REMINDER_MARK_DELIVERED: {
-      if (!payload.key) return state;
-      return {
-        ...state,
-        settings: {
-          ...state.settings,
-          deliveredReminderKeys: [...new Set([
-            ...state.settings.deliveredReminderKeys,
-            payload.key,
-          ])],
-        },
-      };
-    }
-
-    case ActionTypes.REMINDER_PRUNE:
-      return {
-        ...state,
-        settings: {
-          ...state.settings,
-          deliveredReminderKeys: pruneDeliveredReminderKeys(
-            state.settings.deliveredReminderKeys,
-            state.workouts,
-          ),
-        },
-      };
 
     case ActionTypes.WORKOUT_SESSION_START:
       return updateWorkoutById(state, payload.id ?? payload.workoutId, (workout) => (

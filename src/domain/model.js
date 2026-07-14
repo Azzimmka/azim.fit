@@ -3,7 +3,6 @@
  *
  * @typedef {'planned' | 'completed' | 'skipped'} WorkoutStatus
  * @typedef {'pending' | 'completed' | 'skipped'} SetResultStatus
- * @typedef {null | 0 | 5 | 15 | 30 | 60} ReminderOffset
  *
  * @typedef {Object} SetResult
  * @property {number} setNumber One-based position within the exercise.
@@ -34,13 +33,10 @@
  * @property {string} plannedDate Local calendar date, YYYY-MM-DD.
  * @property {string} occurrenceDate Original occurrence date used for series dedupe.
  * @property {string} time Local HH:mm.
- * @property {number} durationMinutes
  * @property {string} intensity
- * @property {string} planNotes
  * @property {string} resultNotes
  * @property {string|null} startedAt ISO timestamp of the first active-session opening.
  * @property {string|null} completedAt ISO timestamp; only set when completed.
- * @property {ReminderOffset} reminder
  * @property {string|null} seriesId
  * @property {string|null} sourceTemplateId
  * @property {number} pointsAwarded Historical awarded points; zero until completion.
@@ -50,10 +46,7 @@
  * @property {string} title
  * @property {string} type
  * @property {string} time
- * @property {number} durationMinutes
  * @property {string} intensity
- * @property {string} planNotes
- * @property {ReminderOffset} reminder
  * @property {Array<Pick<Exercise, 'id'|'name'|'sets'|'plannedReps'|'plannedWeightKg'|'restSeconds'>>} exercises
  *
  * @typedef {Object} RecurrenceSeries
@@ -78,9 +71,6 @@
  * @property {string} updatedAt
  *
  * @typedef {Object} AppSettings
- * @property {ReminderOffset} defaultReminder
- * @property {boolean} includeWorkoutTitleInNotifications
- * @property {string[]} deliveredReminderKeys
  *
  * @typedef {Object} ActiveTimer
  * @property {'running'|'paused'} status
@@ -103,8 +93,6 @@
 export const SCHEMA_VERSION = 2;
 export const WORKOUT_STATUSES = Object.freeze(['planned', 'completed', 'skipped']);
 export const SET_RESULT_STATUSES = Object.freeze(['pending', 'completed', 'skipped']);
-export const REMINDER_OFFSETS = Object.freeze([0, 5, 15, 30, 60]);
-export const DEFAULT_REMINDER = 15;
 export const DEFAULT_REST_SECONDS = 90;
 export const MIN_REST_SECONDS = 15;
 export const MAX_REST_SECONDS = 900;
@@ -112,8 +100,4 @@ export const MAX_EXERCISE_SETS = 20;
 export const DEFAULT_SERIES_WEEKS = 8;
 export const MAX_SERIES_WEEKS = 52;
 
-export const DEFAULT_SETTINGS = Object.freeze({
-  defaultReminder: DEFAULT_REMINDER,
-  includeWorkoutTitleInNotifications: false,
-  deliveredReminderKeys: Object.freeze([]),
-});
+export const DEFAULT_SETTINGS = Object.freeze({});

@@ -8,7 +8,6 @@ import {
   getToday,
   isCalendarDate,
 } from '../../domain/dates.js';
-import { DEFAULT_REMINDER, REMINDER_OFFSETS } from '../../domain/model.js';
 import { calculatePlanPoints } from '../../domain/points.js';
 import { normalizeExercise } from '../../domain/schema.js';
 
@@ -20,15 +19,6 @@ const WEEKDAYS = [
   { value: 5, label: 'Пт' },
   { value: 6, label: 'Сб' },
   { value: 7, label: 'Вс' },
-];
-
-const REMINDER_OPTIONS = [
-  { value: 'off', label: 'Выключено' },
-  { value: '0', label: 'Вовремя' },
-  { value: '5', label: 'За 5 минут' },
-  { value: '15', label: 'За 15 минут' },
-  { value: '30', label: 'За 30 минут' },
-  { value: '60', label: 'За 60 минут' },
 ];
 
 const SET_RESULT_LABELS = Object.freeze({
@@ -55,12 +45,6 @@ const newExercise = () => ({
   actualReps: '',
   rpe: '',
 });
-
-function normalizeReminderValue(value, fallback) {
-  if (value === null) return null;
-  const number = Number(value);
-  return REMINDER_OFFSETS.includes(number) ? number : fallback;
-}
 
 function normalizeExerciseForForm(exercise) {
   return {
@@ -89,7 +73,7 @@ function normalizeResultExerciseForForm(exercise, completedAt) {
   };
 }
 
-function initialWorkoutForm(initialDate, workout, defaultReminder, resultMode = false) {
+function initialWorkoutForm(initialDate, workout, resultMode = false) {
   const source = workout ?? {};
   const exercises = Array.isArray(source.exercises) && source.exercises.length
     ? source.exercises.map((exercise) => resultMode
@@ -103,18 +87,15 @@ function initialWorkoutForm(initialDate, workout, defaultReminder, resultMode = 
     intensity: source.intensity ?? 'Средняя',
     plannedDate: source.plannedDate ?? initialDate,
     time: source.time ?? '18:00',
-    durationMinutes: source.durationMinutes ?? 45,
-    planNotes: source.planNotes ?? '',
     resultNotes: source.resultNotes ?? '',
-    reminder: normalizeReminderValue(source.reminder, defaultReminder),
     exercises,
   };
 }
 
-function initialTemplateForm(initialDate, template, defaultReminder) {
+function initialTemplateForm(initialDate, template) {
   const plan = template?.plan ?? {};
   return {
-    ...initialWorkoutForm(initialDate, plan, defaultReminder),
+    ...initialWorkoutForm(initialDate, plan),
     templateName: template?.name ?? '',
   };
 }
@@ -154,10 +135,7 @@ function planPayload(form) {
     title: form.title.trim(),
     type: form.type,
     time: form.time,
-    durationMinutes: Math.trunc(Number(form.durationMinutes)),
     intensity: form.intensity,
-    planNotes: form.planNotes.trim(),
-    reminder: form.reminder,
     exercises: form.exercises.map(cleanPlanExercise),
   };
 }
@@ -171,8 +149,6 @@ function validatePlan(form, { includeDate, templateMode, repeat, weekdays, inter
   if (!form.title.trim()) return 'Дай тренировке название.';
   if (includeDate && !isCalendarDate(form.plannedDate)) return 'Укажи корректную дату.';
   if (!isValidClockTime(form.time)) return 'Укажи корректное время.';
-  const duration = Number(form.durationMinutes);
-  if (!Number.isInteger(duration) || duration < 5 || duration > 300) return 'Продолжительность должна быть от 5 до 300 минут.';
   if (!form.exercises.length) return 'Добавь хотя бы одно упражнение.';
 
   for (const exercise of form.exercises) {
@@ -221,7 +197,6 @@ function WorkoutEditorContent({
   initialDate,
   workout,
   template,
-  defaultReminder = DEFAULT_REMINDER,
   onClose,
   onSubmit,
 }) {
@@ -230,8 +205,8 @@ function WorkoutEditorContent({
   const isRescheduleMode = mode === 'reschedule';
   const isTemplateMode = mode === 'template';
   const [form, setForm] = useState(() => isTemplateMode
-    ? initialTemplateForm(resolvedDate, template, defaultReminder)
-    : initialWorkoutForm(resolvedDate, workout, defaultReminder, isResultMode));
+    ? initialTemplateForm(resolvedDate, template)
+    : initialWorkoutForm(resolvedDate, workout, isResultMode));
   const [repeat, setRepeat] = useState(false);
   const [weekdays, setWeekdays] = useState(() => [getIsoWeekday(workout?.plannedDate ?? resolvedDate)]);
   const [intervalWeeks, setIntervalWeeks] = useState(1);
@@ -434,14 +409,11 @@ function WorkoutEditorContent({
               <label className="field"><span>Интенсивность</span><select value={form.intensity} onChange={(event) => update('intensity', event.target.value)}><option>Лёгкая</option><option>Средняя</option><option>Высокая</option></select></label>
               {!isTemplateMode && <label className="field"><span>Дата</span><input type="date" required value={form.plannedDate} onChange={(event) => updatePlannedDate(event.target.value)} /></label>}
               <label className="field"><span>Время</span><input type="time" required value={form.time} onChange={(event) => update('time', event.target.value)} /></label>
-              <label className="field"><span>Продолжительность, минут</span><input type="number" min="5" max="300" step="1" value={form.durationMinutes} onChange={(event) => update('durationMinutes', event.target.value)} /></label>
-              <label className="field"><span>Напоминание</span><select value={form.reminder ?? 'off'} onChange={(event) => update('reminder', event.target.value === 'off' ? null : Number(event.target.value))}>{REMINDER_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
             </div>
-            <label className="field full"><span>Заметка к плану</span><textarea value={form.planNotes} onChange={(event) => update('planNotes', event.target.value)} maxLength="2000" placeholder="Цель, техника или важное напоминание" /></label>
 
             <section className="exercise-builder" aria-labelledby="exercise-builder-title">
               <div className="builder-head">
-                <div><strong id="exercise-builder-title">Упражнения</strong><small>Вес можно оставить пустым, отдых — 0 или 15–900 секунд</small></div>
+                <div><strong id="exercise-builder-title">Упражнения</strong><small>Отдых — 0 или 15–900 секунд</small></div>
                 <button type="button" className="text-button" onClick={() => update('exercises', [...form.exercises, newExercise()])}><Plus size={17} aria-hidden="true" /> Добавить</button>
               </div>
               {form.exercises.map((exercise, index) => (
@@ -450,7 +422,6 @@ function WorkoutEditorContent({
                   <label className="field exercise-name-field"><span>Упражнение</span><input value={exercise.name} maxLength="120" onChange={(event) => updateExercise(exercise.id, 'name', event.target.value)} placeholder="Отжимания" /></label>
                   <label className="field"><span>Подходы</span><input type="number" min="1" max="20" step="1" value={exercise.sets} onChange={(event) => updateExercise(exercise.id, 'sets', event.target.value)} /></label>
                   <label className="field"><span>Повторы</span><input value={exercise.plannedReps} maxLength="40" onChange={(event) => updateExercise(exercise.id, 'plannedReps', event.target.value)} placeholder="10–12" /></label>
-                  <label className="field"><span>Вес, кг</span><input type="number" min="0.5" max="1000" step="0.5" value={exercise.plannedWeightKg} onChange={(event) => updateExercise(exercise.id, 'plannedWeightKg', event.target.value)} /></label>
                   <label className="field"><span>Отдых, сек</span><input type="number" min="0" max="900" step="15" value={exercise.restSeconds} onChange={(event) => updateExercise(exercise.id, 'restSeconds', event.target.value)} /></label>
                   <button type="button" className="icon-button danger" disabled={form.exercises.length === 1} onClick={() => update('exercises', form.exercises.filter((item) => item.id !== exercise.id))} aria-label={`Удалить упражнение ${exercise.name || index + 1}`}><Trash2 size={17} aria-hidden="true" /></button>
                 </fieldset>

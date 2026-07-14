@@ -119,7 +119,7 @@ export function WorkoutCard({
       <article className="compact-workout">
         <span className={`workout-icon type-${workout.type.toLowerCase()}`}><Icon size={20} aria-hidden="true" /></span>
         <div className="compact-copy">
-          <span>{workout.time} · {workout.durationMinutes} мин</span>
+          <span>{workout.time}</span>
           <h3>{workout.title}</h3>
           <p>{formatRuCount(exercises.length, 'exercise')} · +{formatRuCount(points, 'point')}</p>
         </div>
@@ -139,7 +139,7 @@ export function WorkoutCard({
       <div className="workout-card-head">
         <span className={`workout-icon type-${workout.type.toLowerCase()}`}><Icon size={22} aria-hidden="true" /></span>
         <div className="workout-title-wrap">
-          <div className="meta-row"><span>{workout.type}</span><i /> <Clock3 size={14} aria-hidden="true" /> {workout.time} <i /> {workout.durationMinutes} мин <i /> {workout.intensity}</div>
+          <div className="meta-row"><span>{workout.type}</span><i /> <Clock3 size={14} aria-hidden="true" /> {workout.time} <i /> {workout.intensity}</div>
           <h3>{workout.title}</h3>
         </div>
         <div className="points-tag" aria-label={`Можно получить ${formatRuCount(points, 'point')}`}><Star size={14} fill="currentColor" aria-hidden="true" /> +{points}</div>
@@ -159,7 +159,6 @@ export function WorkoutCard({
         )}
       </div>
 
-      {workout.planNotes && <p className="workout-note"><strong>План:</strong> {workout.planNotes}</p>}
       {missed && <div className="status-banner warning" role="status">Пропущена · можно выполнить сейчас или перенести</div>}
       {future && <div className="status-banner" role="status">Выполнение станет доступно {new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'long' }).format(new Date(`${workout.plannedDate}T12:00:00`))}</div>}
       {skipped && <div className="status-banner muted" role="status">Тренировка пропущена</div>}

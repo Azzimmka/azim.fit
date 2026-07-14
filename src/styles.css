@@ -1650,7 +1650,7 @@ h3 {
   flex: 1;
 }
 
-/* Progress, records and body weight */
+/* Progress, selected day and body weight */
 .metric-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1716,7 +1716,7 @@ h3 {
 }
 
 .chart-card,
-.records-card,
+.day-summary-card,
 .weight-card {
   margin-top: 18px;
   padding: 25px;
@@ -1751,6 +1751,9 @@ h3 {
 }
 
 .bar-column {
+  min-height: 44px;
+  padding: 0;
+  border: 0;
   min-width: 0;
   display: grid;
   grid-template-rows: 18px 1fr 22px;
@@ -1760,6 +1763,7 @@ h3 {
   font-size: 9px;
   font-weight: 800;
   text-transform: uppercase;
+  background: transparent;
 }
 
 .bar-value {
@@ -1776,6 +1780,7 @@ h3 {
   display: flex;
   align-items: flex-end;
   background: #f0f2ed;
+  transition: box-shadow 160ms ease, background 160ms ease;
 }
 
 .bar-track span {
@@ -1789,62 +1794,151 @@ h3 {
   color: var(--ink);
 }
 
-.records-card .section-heading > svg {
-  flex: 0 0 auto;
-  color: #d79d1d;
+.bar-column:hover .bar-track {
+  background: #e9ece5;
 }
 
-.records-grid {
+.bar-column.selected {
+  color: var(--ink);
+}
+
+.bar-column.selected .bar-value {
+  color: var(--ink);
+}
+
+.bar-column.selected .bar-track {
+  background: #edf0e9;
+  box-shadow: 0 0 0 3px rgba(100, 92, 255, 0.2);
+}
+
+.bar-column.selected .bar-track span {
+  background: linear-gradient(180deg, #d4ff7f, var(--lime-strong));
+}
+
+.day-summary-heading {
+  align-items: flex-start;
+}
+
+.day-summary-heading h2 {
+  margin-bottom: 5px;
+}
+
+.day-summary-weight {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.day-summary-points {
+  min-height: 34px;
+  padding: 8px 11px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: #806018;
+  background: #fff8d9;
+  font-size: 10px;
+  font-weight: 850;
+  white-space: nowrap;
+}
+
+.day-summary-points svg {
+  color: #f2ab20;
+}
+
+.day-workout-list {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  gap: 8px;
 }
 
-.records-grid article {
+.day-workout-row {
   min-width: 0;
-  min-height: 92px;
-  padding: 14px;
+  min-height: 72px;
+  padding: 13px 14px;
   border: 1px solid var(--line-soft);
   border-radius: 15px;
   display: flex;
   align-items: center;
   gap: 12px;
-  background: #fbfcf9;
+  background: var(--card-soft);
+  transition: border-color 160ms ease, background 160ms ease;
 }
 
-.record-icon {
-  width: 40px;
-  height: 40px;
+.day-workout-row:hover {
+  border-color: #d8ddd4;
+  background: #f7f9f4;
+}
+
+.day-workout-row > svg {
   flex: 0 0 auto;
-  border-radius: 12px;
-  display: grid;
-  place-items: center;
-  color: #725f24;
-  background: #fff5cf;
+  color: #7d8983;
 }
 
-.records-grid article > div {
+.day-workout-copy {
   min-width: 0;
+  flex: 1;
 }
 
-.records-grid h3 {
-  margin: 0 0 3px;
+.day-workout-title {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.day-workout-title h3 {
+  min-width: 0;
+  margin: 0;
   overflow: hidden;
   font-size: 13px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.records-grid p {
-  margin: 0;
-  color: #3f5047;
-  font-size: 12px;
-  font-weight: 800;
+.day-workout-status {
+  min-height: 24px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #4d5d55;
+  background: #edf0ec;
+  font-size: 8px;
+  font-weight: 850;
+  white-space: nowrap;
 }
 
-.records-grid small {
-  color: #84908a;
+.day-workout-status.completed {
+  color: #3f6510;
+  background: var(--lime-soft);
+}
+
+.day-workout-status.missed {
+  color: var(--warning);
+  background: var(--warning-soft);
+}
+
+.day-workout-copy > p {
+  min-height: 16px;
+  margin: 5px 0 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--muted);
   font-size: 9px;
+  font-weight: 700;
+}
+
+.day-workout-copy > p span + span::before {
+  content: '·';
+  margin-right: 12px;
 }
 
 .muted-copy {
@@ -1990,16 +2084,11 @@ h3 {
   line-height: 1.2;
 }
 
-.settings-card-title p,
-.settings-copy {
+.settings-card-title p {
   margin: 0;
   color: #7b8781;
   font-size: 10px;
   line-height: 1.5;
-}
-
-.settings-action {
-  width: 100%;
 }
 
 .settings-info {
@@ -2114,8 +2203,7 @@ h3 {
 }
 
 .pwa-install-prompt button,
-.pwa-update-prompt button,
-.notification-permission button {
+.pwa-update-prompt button {
   min-height: 44px;
   padding: 0 11px;
   border: 1px solid rgba(79, 72, 220, 0.22);
@@ -2131,26 +2219,6 @@ h3 {
   border-color: transparent;
   color: #fff;
   background: var(--ink);
-}
-
-.notification-permission {
-  display: grid;
-  gap: 8px;
-}
-
-.notification-permission button {
-  width: 100%;
-  min-height: 44px;
-  color: var(--ink);
-  border-color: var(--line);
-}
-
-.notification-permission p,
-.settings-card > p[role='status'] {
-  margin: 0;
-  color: #8a5525;
-  font-size: 10px;
-  line-height: 1.45;
 }
 
 /* Forms and editor */
@@ -2300,7 +2368,7 @@ h3 {
 
 .builder-row-v2 {
   display: grid;
-  grid-template-columns: minmax(165px, 1.7fr) repeat(4, minmax(78px, 1fr)) 44px;
+  grid-template-columns: minmax(165px, 1.7fr) repeat(3, minmax(78px, 1fr)) 44px;
   align-items: end;
   gap: 8px;
   padding: 11px;
@@ -2720,7 +2788,7 @@ h3 {
   }
 
   .builder-row-v2 {
-    grid-template-columns: repeat(4, minmax(0, 1fr)) 44px;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) 44px;
   }
 
   .builder-row-v2 .exercise-name-field {
@@ -2865,13 +2933,7 @@ h3 {
   }
 
   .header-actions .primary-button {
-    width: 44px;
-    padding: 0;
-    font-size: 0;
-  }
-
-  .header-actions .primary-button svg {
-    margin: 0;
+    display: none;
   }
 
   .day-hero {
@@ -2926,7 +2988,7 @@ h3 {
 
   .calendar-card,
   .chart-card,
-  .records-card,
+  .day-summary-card,
   .weight-card {
     padding: 20px;
   }
@@ -2970,7 +3032,13 @@ h3 {
   .header-actions .header-link {
     width: 44px;
     padding: 0;
+    gap: 0;
     font-size: 0;
+    line-height: 1;
+  }
+
+  .header-actions .header-link svg {
+    display: block;
   }
 
   .eyebrow {
@@ -3202,20 +3270,28 @@ h3 {
   }
 
   .chart-card,
-  .records-card,
+  .day-summary-card,
   .weight-card {
     padding: 17px;
     border-radius: 19px;
   }
 
+  .chart-card {
+    padding-inline: 13px;
+  }
+
   .bar-chart {
     height: 190px;
-    gap: 8px;
+    gap: 4px;
     padding-inline: 0;
   }
 
-  .records-grid {
-    grid-template-columns: 1fr;
+  .day-workout-title {
+    align-items: flex-start;
+  }
+
+  .day-workout-status {
+    flex: 0 0 auto;
   }
 
   .weight-form {
@@ -3497,7 +3573,7 @@ h3 {
   .workout-card,
   .calendar-card,
   .chart-card,
-  .records-card,
+  .day-summary-card,
   .weight-card,
   .settings-card {
     break-inside: avoid;

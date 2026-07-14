@@ -15,7 +15,6 @@ describe('WorkoutEditor', () => {
         open
         mode="create"
         initialDate="2026-07-13"
-        defaultReminder={30}
         onClose={() => {}}
         onSubmit={onSubmit}
       />,
@@ -23,6 +22,10 @@ describe('WorkoutEditor', () => {
 
     await user.type(screen.getByLabelText('Название тренировки'), 'День ног');
     await user.type(screen.getByLabelText('Упражнение'), 'Приседания');
+    expect(screen.queryByLabelText('Вес, кг')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Продолжительность, минут')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Напоминание')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Заметка к плану')).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Запланировать' }));
 
     expect(onSubmit).toHaveBeenCalledTimes(1);
@@ -30,8 +33,6 @@ describe('WorkoutEditor', () => {
     expect(payload).toMatchObject({
       title: 'День ног',
       plannedDate: '2026-07-13',
-      durationMinutes: 45,
-      reminder: 30,
       exercises: [{
         name: 'Приседания',
         sets: 3,
@@ -41,6 +42,9 @@ describe('WorkoutEditor', () => {
       }],
     });
     expect(payload).not.toHaveProperty('duration');
+    expect(payload).not.toHaveProperty('durationMinutes');
+    expect(payload).not.toHaveProperty('planNotes');
+    expect(payload).not.toHaveProperty('reminder');
     expect(payload.exercises[0]).not.toHaveProperty('completedSets');
     expect(recurrence).toBeNull();
   });
@@ -55,10 +59,7 @@ describe('WorkoutEditor', () => {
         title: 'Верх тела',
         type: 'Силовая',
         time: '07:30',
-        durationMinutes: 50,
         intensity: 'Высокая',
-        planNotes: 'Контроль техники',
-        reminder: 15,
         exercises: [{
           id: 'exercise-1',
           name: 'Жим лёжа',

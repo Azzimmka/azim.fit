@@ -43,7 +43,6 @@ import { useTimerCompletionSound } from './features/timer/useTimerCompletionSoun
 import { WorkoutCard } from './features/workouts/WorkoutCard.jsx';
 import { WorkoutEditor } from './features/workouts/WorkoutEditor.jsx';
 import { PwaInstallPrompt, PwaUpdatePrompt, requestPersistentStorage } from './pwa/index.js';
-import { NotificationPermissionButton, useReminderScheduler } from './reminders/index.js';
 import {
   ActionTypes,
   STORAGE_KEY_V2,
@@ -99,9 +98,7 @@ function createDemoState(today) {
         status: 'completed',
         plannedDate: yesterday,
         time: '18:30',
-        durationMinutes: 50,
         intensity: 'Средняя',
-        planNotes: 'Контролируй технику и не спеши.',
         resultNotes: 'Все подходы выполнены уверенно.',
         completedAt,
         pointsAwarded: 80,
@@ -118,9 +115,7 @@ function createDemoState(today) {
         status: 'planned',
         plannedDate: today,
         time: '18:30',
-        durationMinutes: 45,
         intensity: 'Средняя',
-        reminder: 15,
         exercises: [
           { id: 'demo-today-1', name: 'Отжимания', sets: 4, plannedReps: '12', restSeconds: 90 },
           { id: 'demo-today-2', name: 'Тяга гантели', sets: 3, plannedReps: '10', plannedWeightKg: 18, restSeconds: 90 },
@@ -133,7 +128,6 @@ function createDemoState(today) {
         status: 'planned',
         plannedDate: missedDate,
         time: '08:00',
-        durationMinutes: 30,
         intensity: 'Лёгкая',
         exercises: [
           { id: 'demo-missed-1', name: 'Быстрая ходьба', sets: 1, plannedReps: '20 мин', restSeconds: 0 },
@@ -149,10 +143,7 @@ function createDemoState(today) {
           title: 'Короткая тренировка',
           type: 'Силовая',
           time: '18:00',
-          durationMinutes: 25,
           intensity: 'Средняя',
-          planNotes: 'На день с плотным расписанием.',
-          reminder: 15,
           exercises: [
             { id: 'demo-template-1', name: 'Отжимания', sets: 3, plannedReps: '10', restSeconds: 60 },
             { id: 'demo-template-2', name: 'Приседания', sets: 3, plannedReps: '15', restSeconds: 60 },
@@ -180,9 +171,7 @@ function createDemoState(today) {
           title: 'Восстановление',
           type: 'Мобильность',
           time: '08:30',
-          durationMinutes: 20,
           intensity: 'Лёгкая',
-          reminder: 15,
           exercises: [
             { name: 'Растяжка ног', sets: 3, plannedReps: '40 сек', restSeconds: 30 },
             { name: 'Мобильность спины', sets: 3, plannedReps: '10', restSeconds: 30 },
@@ -342,7 +331,6 @@ export default function App() {
       .format(new Date(`${item.date}T12:00:00`))
       .replace('.', ''),
   })), [state, today]);
-  const records = useMemo(() => calculatePersonalRecords(state.workouts), [state.workouts]);
   const todayPoints = selectDailyPoints(state, today, 1)[0]?.points ?? 0;
   const remainingPoints = 250 - (stats.totalPoints % 250);
 
@@ -397,15 +385,6 @@ export default function App() {
       window.removeEventListener('pageshow', refreshTimer);
     };
   }, [state.activeTimer]);
-
-  const markReminderDelivered = useCallback((key) => {
-    dispatch({ type: ActionTypes.REMINDER_MARK_DELIVERED, payload: { key } });
-  }, []);
-  useReminderScheduler({
-    workouts: state.workouts,
-    settings: state.settings,
-    onReminderDelivered: markReminderDelivered,
-  });
 
   const closeEditor = () => setEditor(null);
   const openCreate = (date = today) => setEditor({ mode: 'create', initialDate: date });
@@ -655,9 +634,6 @@ export default function App() {
   }, [timerSnapshot.endsAt, timerSnapshot.expired]);
   const timerWorkout = state.workouts.find((workout) => workout.id === timerSnapshot.workoutId);
   const timerExercise = timerWorkout?.exercises.find((exercise) => exercise.id === timerSnapshot.exerciseId);
-  const notificationControl = (
-    <NotificationPermissionButton className="notification-permission" />
-  );
   const sessionActions = {
     onStart: (workoutId) => dispatch({
       type: ActionTypes.WORKOUT_SESSION_START,
@@ -747,8 +723,8 @@ export default function App() {
               level={stats.level}
               streak={stats.streakDays}
               completedWorkouts={completedWorkouts}
+              workouts={state.workouts}
               weekData={weekData}
-              records={records}
               bodyWeightEntries={state.bodyWeightEntries}
               onSaveWeight={(entry) => dispatch({ type: ActionTypes.BODY_WEIGHT_UPSERT, payload: entry })}
               onDeleteWeight={(date) => performDeletion(
@@ -764,9 +740,6 @@ export default function App() {
           element={(
             <SettingsPage
               points={stats.totalPoints}
-              settings={state.settings}
-              notificationControl={notificationControl}
-              onUpdateSettings={(patch) => dispatch({ type: ActionTypes.SETTINGS_UPDATE, payload: { patch } })}
               onLoadDemo={() => {
                 dispatch({ type: ActionTypes.REPLACE_STATE, payload: { state: createDemoState(today) } });
                 setNotice({ variant: 'success', title: 'Демо загружено', message: 'Можно изучить все основные сценарии.' });
@@ -813,7 +786,6 @@ export default function App() {
         initialDate={editor?.initialDate ?? today}
         workout={editor?.workout}
         template={editor?.template}
-        defaultReminder={state.settings.defaultReminder}
         onClose={closeEditor}
         onSubmit={submitEditor}
       />

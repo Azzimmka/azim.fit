@@ -10,7 +10,6 @@ import {
 } from './dates.js';
 import { makeId } from './id.js';
 import {
-  DEFAULT_REMINDER,
   DEFAULT_REST_SECONDS,
   DEFAULT_SERIES_WEEKS,
   MAX_EXERCISE_SETS,
@@ -19,7 +18,6 @@ import {
   WORKOUT_STATUSES,
 } from './model.js';
 import { calculateAwardedPoints } from './points.js';
-import { normalizeReminder } from './reminders.js';
 import { normalizeActiveTimerForWorkouts, normalizeRestSeconds } from './timer.js';
 
 function isRecord(value) {
@@ -192,15 +190,7 @@ export function normalizePlanSnapshot(input, options = {}) {
     title: toText(source.title, 'Тренировка') || 'Тренировка',
     type: toText(source.type, 'Силовая') || 'Силовая',
     time: normalizeClockTime(source.time, '18:00'),
-    durationMinutes: toBoundedInteger(
-      source.durationMinutes ?? source.duration,
-      45,
-      5,
-      300,
-    ),
     intensity: toText(source.intensity, 'Средняя') || 'Средняя',
-    planNotes: toText(source.planNotes ?? source.notes),
-    reminder: normalizeReminder(source.reminder, null),
     exercises: ensureUniqueIds(exercises, 'exercise', options.idFactory).map((exercise) => ({
       id: exercise.id,
       name: exercise.name,
@@ -257,18 +247,10 @@ export function normalizeWorkout(input, options = {}) {
     plannedDate,
     occurrenceDate,
     time,
-    durationMinutes: toBoundedInteger(
-      source.durationMinutes ?? source.duration,
-      45,
-      5,
-      300,
-    ),
     intensity: toText(source.intensity, 'Средняя') || 'Средняя',
-    planNotes: toText(source.planNotes ?? source.notes),
     resultNotes: toText(source.resultNotes),
     startedAt: toIsoTimestamp(source.startedAt, null),
     completedAt,
-    reminder: normalizeReminder(source.reminder, null),
     seriesId: toNullableId(source.seriesId),
     sourceTemplateId: toNullableId(source.sourceTemplateId),
     pointsAwarded,
@@ -349,21 +331,8 @@ export function normalizeBodyWeightEntry(input, options = {}) {
 }
 
 /** @param {unknown} input */
-export function normalizeSettings(input) {
-  const source = isRecord(input) ? input : {};
-  const hasDefaultReminder = Object.prototype.hasOwnProperty.call(source, 'defaultReminder')
-    || Object.prototype.hasOwnProperty.call(source, 'defaultReminderMinutes');
-  const rawDefaultReminder = source.defaultReminder ?? source.defaultReminderMinutes;
-  const deliveredReminderKeys = Array.isArray(source.deliveredReminderKeys)
-    ? [...new Set(source.deliveredReminderKeys.filter((key) => typeof key === 'string' && key))]
-    : [];
-  return {
-    defaultReminder: hasDefaultReminder
-      ? normalizeReminder(rawDefaultReminder, DEFAULT_REMINDER)
-      : DEFAULT_REMINDER,
-    includeWorkoutTitleInNotifications: source.includeWorkoutTitleInNotifications === true,
-    deliveredReminderKeys,
-  };
+export function normalizeSettings() {
+  return {};
 }
 
 /** @returns {import('./model.js').AppStateV2} */
@@ -443,10 +412,7 @@ export function migrateV1State(input, options = {}) {
       status: workout.completed === true ? 'completed' : 'planned',
       plannedDate: workout.date,
       occurrenceDate: workout.date,
-      durationMinutes: workout.duration,
-      planNotes: workout.notes ?? '',
       resultNotes: '',
-      reminder: null,
       seriesId: null,
       sourceTemplateId: null,
       pointsAwarded: workout.completed === true ? workout.points : 0,

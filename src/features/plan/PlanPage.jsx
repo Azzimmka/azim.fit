@@ -73,7 +73,7 @@ function TemplatePanel({ templates, selectedDate, onCreate, onApply, onEdit, onD
         return (
           <article className="template-card" key={template.id}>
             <div className="template-card-icon"><Copy aria-hidden="true" /></div>
-            <div><span>{plan.type} · {plan.durationMinutes} мин</span><h3>{template.name}</h3><p>{formatRuCount(plan.exercises.length, 'exercise')}</p></div>
+            <div><span>{plan.type}</span><h3>{template.name}</h3><p>{formatRuCount(plan.exercises.length, 'exercise')}</p></div>
             <div className="template-actions"><button type="button" className="primary-button" onClick={() => onApply(template, selectedDate)}>Использовать</button><button type="button" className="icon-button" onClick={() => onEdit(template)} aria-label={`Редактировать шаблон ${template.name}`}><Edit3 size={17} aria-hidden="true" /></button><button type="button" className="icon-button danger" onClick={() => onDelete(template)} aria-label={`Удалить шаблон ${template.name}`}><Trash2 size={17} aria-hidden="true" /></button></div>
           </article>
         );

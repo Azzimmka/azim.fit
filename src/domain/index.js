@@ -5,7 +5,6 @@ export * from './plural.js';
 export * from './points.js';
 export * from './records.js';
 export * from './recurrence.js';
-export * from './reminders.js';
 export * from './schema.js';
 export * from './selectors.js';
 export { cloneTemplatePlan, updateTemplate } from './templates.js';

@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PlanPage } from './plan/PlanPage.jsx';
+import { ProgressPage } from './progress/ProgressPage.jsx';
 import { SettingsPage } from './settings/SettingsPage.jsx';
 import { TodayPage } from './today/TodayPage.jsx';
 
@@ -44,10 +45,7 @@ describe('feature pages', () => {
         title: 'Ноги',
         type: 'Силовая',
         time: '18:00',
-        durationMinutes: 50,
         intensity: 'Средняя',
-        planNotes: '',
-        reminder: 15,
         exercises: [
           { id: 'exercise-1', name: 'Приседания', sets: 3, plannedReps: '10', plannedWeightKg: 60, restSeconds: 90 },
           { id: 'exercise-2', name: 'Выпады', sets: 3, plannedReps: '12', plannedWeightKg: null, restSeconds: 60 },
@@ -75,32 +73,92 @@ describe('feature pages', () => {
       />,
     );
 
-    expect(screen.getByText('Силовая · 50 мин')).toBeInTheDocument();
+    expect(screen.getByText('Силовая')).toBeInTheDocument();
     expect(screen.getByText('2 упражнения')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Использовать' }));
     expect(onApplyTemplate).toHaveBeenCalledWith(template, '2026-07-15');
   });
 
-  it('writes canonical settings field names', async () => {
-    const user = userEvent.setup();
-    const onUpdateSettings = vi.fn();
-
+  it('renders settings without reminder controls', () => {
     render(
       <SettingsPage
         points={0}
-        settings={{ defaultReminder: 15, includeWorkoutTitleInNotifications: false }}
-        onUpdateSettings={onUpdateSettings}
-        notificationControl={<div>Уведомления</div>}
         onLoadDemo={() => {}}
         onReset={() => {}}
         storageStatus="unknown"
       />,
     );
 
-    await user.selectOptions(screen.getByLabelText('Напоминать по умолчанию'), '30');
-    await user.click(screen.getByLabelText(/Показывать название/));
+    expect(screen.getByRole('heading', { name: 'Приложение' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Локальные данные' })).toBeInTheDocument();
+    expect(screen.queryByText('Напоминания')).not.toBeInTheDocument();
+  });
 
-    expect(onUpdateSettings).toHaveBeenNthCalledWith(1, { defaultReminder: 30 });
-    expect(onUpdateSettings).toHaveBeenNthCalledWith(2, { includeWorkoutTitleInNotifications: true });
+  it('shows a compact summary for the selected progress day', async () => {
+    const user = userEvent.setup();
+    const completed = {
+      id: 'late-workout',
+      title: 'Поздняя силовая',
+      status: 'completed',
+      plannedDate: '2026-07-10',
+      time: '18:00',
+      startedAt: '2026-07-12T15:00:00.000Z',
+      completedAt: '2026-07-12T15:38:00.000Z',
+      exercises: [{
+        sets: 3,
+        setResults: [
+          { status: 'completed' },
+          { status: 'completed' },
+          { status: 'skipped' },
+        ],
+      }],
+    };
+    const planned = {
+      id: 'today-workout',
+      title: 'Вечерняя разминка',
+      status: 'planned',
+      plannedDate: '2026-07-14',
+      time: '20:00',
+      exercises: [{ sets: 2, setResults: [{ status: 'pending' }, { status: 'pending' }] }],
+    };
+
+    render(
+      <MemoryRouter>
+        <ProgressPage
+          today="2026-07-14"
+          points={35}
+          level={1}
+          streak={1}
+          completedWorkouts={[completed]}
+          workouts={[completed, planned]}
+          weekData={[
+            { date: '2026-07-12', label: 'вс', points: 35 },
+            { date: '2026-07-13', label: 'пн', points: 0 },
+            { date: '2026-07-14', label: 'вт', points: 0 },
+          ]}
+          bodyWeightEntries={[{ date: '2026-07-12', weightKg: 74.2 }]}
+          onSaveWeight={() => {}}
+          onDeleteWeight={() => {}}
+          onAdd={() => {}}
+        />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByRole('button', { name: /14 июля: 0 баллов/ })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByText('Вечерняя разминка')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /12 июля: 35 баллов/ }));
+
+    expect(screen.getByRole('heading', { name: /12 июля/ })).toBeInTheDocument();
+    expect(screen.getByText('Поздняя силовая')).toBeInTheDocument();
+    expect(screen.getByText('Подходы: 2/3')).toBeInTheDocument();
+    expect(screen.getByText('38 мин')).toBeInTheDocument();
+    expect(screen.getByText('74.2 кг', { selector: '.day-summary-weight' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Открыть тренировку «Поздняя силовая»' }))
+      .toHaveAttribute('href', '/workouts/late-workout');
+    expect(screen.queryByText('Личные рекорды')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /13 июля: 0 баллов/ }));
+    expect(screen.getByText('В этот день тренировок не было.')).toBeInTheDocument();
   });
 });

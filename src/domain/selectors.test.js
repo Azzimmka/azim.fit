@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
+  getCompletedWorkoutDurationMinutes,
   getCalendarDayStatus,
+  getWorkoutSetProgress,
   selectCompletionStreak,
   selectDailyPoints,
   selectMissedWorkouts,
+  selectProgressWorkoutsForDate,
   selectProgressStats,
 } from './selectors.js';
 
@@ -61,5 +64,43 @@ describe('workout selectors', () => {
       streakDays: 2,
     });
   });
-});
 
+  it('groups progress workouts by actual completion or planned date', () => {
+    const skipped = {
+      id: 'skipped',
+      title: 'Растяжка',
+      status: 'skipped',
+      plannedDate: '2026-07-12',
+      time: '07:00',
+    };
+
+    expect(selectProgressWorkoutsForDate([...workouts, skipped], '2026-07-12').map((item) => item.id))
+      .toEqual(['skipped', 'late']);
+    expect(selectProgressWorkoutsForDate(workouts, '2026-07-10')).toEqual([]);
+    expect(selectProgressWorkoutsForDate(workouts, '2026-07-11').map((item) => item.id))
+      .toEqual(['missed']);
+  });
+
+  it('summarizes completed sets and real session duration safely', () => {
+    const workout = {
+      status: 'completed',
+      startedAt: '2026-07-13T10:00:00.000Z',
+      completedAt: '2026-07-13T10:42:40.000Z',
+      exercises: [
+        {
+          sets: 3,
+          setResults: [
+            { status: 'completed' },
+            { status: 'skipped' },
+            { status: 'pending' },
+          ],
+        },
+        { sets: 2, completedSets: 2 },
+      ],
+    };
+
+    expect(getWorkoutSetProgress(workout)).toEqual({ completed: 3, total: 5 });
+    expect(getCompletedWorkoutDurationMinutes(workout)).toBe(43);
+    expect(getCompletedWorkoutDurationMinutes({ ...workout, startedAt: 'broken' })).toBeNull();
+  });
+});

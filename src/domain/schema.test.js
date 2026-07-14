@@ -56,8 +56,10 @@ describe('V2 schema normalization and V1 migration', () => {
       plannedDate: '2026-07-10',
       occurrenceDate: '2026-07-10',
       pointsAwarded: 123,
-      reminder: null,
     });
+    expect(migrated.workouts[0]).not.toHaveProperty('durationMinutes');
+    expect(migrated.workouts[0]).not.toHaveProperty('planNotes');
+    expect(migrated.workouts[0]).not.toHaveProperty('reminder');
     expect(migrated.workouts[0].exercises[0]).toMatchObject({
       plannedReps: '12',
       completedSets: 4,
@@ -98,8 +100,7 @@ describe('V2 schema normalization and V1 migration', () => {
     expect(state.bodyWeightEntries).toEqual([
       expect.objectContaining({ date: '2026-07-10', weightKg: 79.5 }),
     ]);
-    expect(state.settings.defaultReminder).toBe(15);
-    expect(state.settings.deliveredReminderKeys).toEqual(['x']);
+    expect(state.settings).toEqual({});
     expect(state.activeTimer).toBeNull();
   });
 

@@ -155,10 +155,55 @@ export function selectDailyPoints(stateOrWorkouts, endDate = getToday(), days = 
   });
 }
 
+/** @param {object} workout */
+export function getWorkoutProgressDate(workout) {
+  return workout?.status === 'completed'
+    ? getWorkoutCompletionDate(workout)
+    : (workout?.plannedDate ?? '');
+}
+
+/**
+ * Progress groups completed workouts by their actual completion date. Planned
+ * and skipped workouts stay attached to their planned calendar date.
+ * @param {{workouts?: object[]}|object[]} stateOrWorkouts
+ * @param {string} date
+ */
+export function selectProgressWorkoutsForDate(stateOrWorkouts, date) {
+  return workoutsFrom(stateOrWorkouts)
+    .filter((workout) => getWorkoutProgressDate(workout) === date)
+    .sort((left, right) => (
+      (left.time ?? '').localeCompare(right.time ?? '')
+      || (left.title ?? '').localeCompare(right.title ?? '', 'ru-RU')
+    ));
+}
+
+/** @param {object} workout */
+export function getWorkoutSetProgress(workout) {
+  return (workout?.exercises ?? []).reduce((summary, exercise) => {
+    const plannedSets = Math.max(0, Math.trunc(Number(exercise?.sets) || 0));
+    const setResults = Array.isArray(exercise?.setResults) ? exercise.setResults : null;
+    const completedSets = setResults
+      ? setResults.filter((result) => result?.status === 'completed').length
+      : Math.min(plannedSets, Math.max(0, Math.trunc(Number(exercise?.completedSets) || 0)));
+    return {
+      total: summary.total + plannedSets,
+      completed: summary.completed + completedSets,
+    };
+  }, { total: 0, completed: 0 });
+}
+
+/** @param {object} workout */
+export function getCompletedWorkoutDurationMinutes(workout) {
+  if (workout?.status !== 'completed' || !workout.startedAt || !workout.completedAt) return null;
+  const startedAt = new Date(workout.startedAt).getTime();
+  const completedAt = new Date(workout.completedAt).getTime();
+  if (!Number.isFinite(startedAt) || !Number.isFinite(completedAt) || completedAt < startedAt) return null;
+  return Math.max(1, Math.round((completedAt - startedAt) / 60_000));
+}
+
 /** @param {{bodyWeightEntries?: object[]}} state */
 export function selectBodyWeightHistory(state) {
   return [...(state?.bodyWeightEntries ?? [])].sort((left, right) => left.date.localeCompare(right.date));
 }
 
 export const selectStats = selectProgressStats;
-

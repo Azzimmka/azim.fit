@@ -1,7 +1,34 @@
 import { useId, useMemo, useState } from 'react';
-import { Activity, Dumbbell, Flame, Medal, Scale, Star, Trophy } from 'lucide-react';
+import { Activity, CalendarClock, CheckCircle2, ChevronRight, Clock3, Flame, Scale, Star, Trophy } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { formatRuCount, RU_FORMS, pluralizeRu } from '../../domain/plural.js';
+import {
+  getCompletedWorkoutDurationMinutes,
+  getWorkoutSetProgress,
+  selectProgressWorkoutsForDate,
+} from '../../domain/selectors.js';
 import { PageHeader } from '../layout/AppLayout.jsx';
+
+const DAY_FORMATTER = new Intl.DateTimeFormat('ru-RU', {
+  weekday: 'long',
+  day: 'numeric',
+  month: 'long',
+});
+
+function formatDayLabel(date) {
+  const value = DAY_FORMATTER.format(new Date(`${date}T12:00:00`));
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function getDayWorkoutStatus(workout, today) {
+  if (workout.status === 'completed') {
+    return { key: 'completed', label: 'Выполнена', Icon: CheckCircle2 };
+  }
+  if (workout.status === 'skipped' || workout.plannedDate < today) {
+    return { key: 'missed', label: 'Пропущена', Icon: Clock3 };
+  }
+  return { key: 'planned', label: 'Запланирована', Icon: CalendarClock };
+}
 
 function MetricCard({ icon: Icon, label, value, note, tone }) {
   return <article className={`metric-card ${tone}`}><span className="metric-icon"><Icon size={21} /></span><div><p>{label}</p><strong>{value}</strong><span>{note}</span></div></article>;
@@ -51,9 +78,64 @@ function BodyWeightPanel({ entries, today, onSave, onDelete }) {
   );
 }
 
-export function ProgressPage({ today, points, level, streak, completedWorkouts, weekData, records, bodyWeightEntries, onSaveWeight, onDeleteWeight, onAdd }) {
+function DaySummary({ date, points, workouts, weightEntry, today }) {
+  return (
+    <section className="day-summary-card" aria-labelledby="day-summary-title">
+      <div className="section-heading day-summary-heading">
+        <div>
+          <p className="eyebrow">Итоги дня</p>
+          <h2 id="day-summary-title">{formatDayLabel(date)}</h2>
+          {weightEntry && <p className="day-summary-weight"><Scale size={14} aria-hidden="true" /> {weightEntry.weightKg} кг</p>}
+        </div>
+        <div className="day-summary-points"><Star size={15} fill="currentColor" aria-hidden="true" /> {formatRuCount(points, 'point')}</div>
+      </div>
+
+      {workouts.length > 0 ? (
+        <div className="day-workout-list">
+          {workouts.map((workout) => {
+            const status = getDayWorkoutStatus(workout, today);
+            const setProgress = getWorkoutSetProgress(workout);
+            const duration = getCompletedWorkoutDurationMinutes(workout);
+            const StatusIcon = status.Icon;
+            return (
+              <Link
+                className="day-workout-row"
+                key={workout.id}
+                to={`/workouts/${workout.id}`}
+                aria-label={`Открыть тренировку «${workout.title}»`}
+              >
+                <div className="day-workout-copy">
+                  <div className="day-workout-title">
+                    <h3>{workout.title}</h3>
+                    <span className={`day-workout-status ${status.key}`}><StatusIcon size={13} aria-hidden="true" /> {status.label}</span>
+                  </div>
+                  <p>
+                    {setProgress.total > 0 && <span>Подходы: {setProgress.completed}/{setProgress.total}</span>}
+                    {duration && <span>{duration} мин</span>}
+                  </p>
+                </div>
+                <ChevronRight size={18} aria-hidden="true" />
+              </Link>
+            );
+          })}
+        </div>
+      ) : <p className="muted-copy">В этот день тренировок не было.</p>}
+    </section>
+  );
+}
+
+export function ProgressPage({ today, points, level, streak, completedWorkouts, workouts, weekData, bodyWeightEntries, onSaveWeight, onDeleteWeight, onAdd }) {
   const maxPoints = Math.max(...weekData.map((item) => item.points), 100);
-  const recordRows = useMemo(() => records.slice(0, 12), [records]);
+  const [selectedDate, setSelectedDate] = useState(() => (
+    weekData.some((item) => item.date === today) ? today : (weekData.at(-1)?.date ?? today)
+  ));
+  const selectedDay = weekData.find((item) => item.date === selectedDate) ?? weekData.at(-1) ?? { date: today, points: 0 };
+  const selectedWorkouts = useMemo(
+    () => selectProgressWorkoutsForDate(workouts, selectedDay.date),
+    [selectedDay.date, workouts],
+  );
+  const selectedWeight = bodyWeightEntries.find((entry) => entry.date === selectedDay.date) ?? null;
+
   return (
     <>
       <PageHeader eyebrow="Каждая отметка имеет значение" title="Твой прогресс" points={points} onAdd={() => onAdd(today)} />
@@ -65,13 +147,36 @@ export function ProgressPage({ today, points, level, streak, completedWorkouts, 
 
       <section className="chart-card">
         <div className="section-heading"><div><p className="eyebrow">Последние 7 дней</p><h2>Заработанные баллы</h2></div><div className="chart-total"><Star size={15} fill="currentColor" /> {weekData.reduce((sum, item) => sum + item.points, 0)}</div></div>
-        <div className="bar-chart" role="img" aria-label={weekData.map((item) => `${item.label}: ${formatRuCount(item.points, 'point')}`).join(', ')}>{weekData.map((item) => <div className="bar-column" key={item.date}><div className="bar-value">{item.points || ''}</div><div className="bar-track"><span style={{ height: `${Math.max((item.points / maxPoints) * 100, item.points ? 8 : 2)}%` }} /></div><span className={item.date === today ? 'today-label' : ''}>{item.label}</span></div>)}</div>
+        <div className="bar-chart" role="group" aria-label="Баллы за последние семь дней">
+          {weekData.map((item) => {
+            const selected = item.date === selectedDay.date;
+            return (
+              <button
+                type="button"
+                className={`bar-column${selected ? ' selected' : ''}`}
+                key={item.date}
+                data-date={item.date}
+                aria-pressed={selected}
+                aria-label={`${formatDayLabel(item.date)}: ${formatRuCount(item.points, 'point')}`}
+                onClick={() => setSelectedDate(item.date)}
+              >
+                <span className="bar-value" aria-hidden="true">{item.points || (selected ? '0' : '')}</span>
+                <span className="bar-track" aria-hidden="true"><span style={{ height: `${Math.max((item.points / maxPoints) * 100, item.points ? 8 : 2)}%` }} /></span>
+                <span className={item.date === today ? 'today-label' : ''} aria-hidden="true">{item.label}</span>
+              </button>
+            );
+          })}
+        </div>
+        <p className="visually-hidden" role="status" aria-live="polite">Выбран {formatDayLabel(selectedDay.date)}: {formatRuCount(selectedDay.points, 'point')}</p>
       </section>
 
-      <section className="records-card">
-        <div className="section-heading"><div><p className="eyebrow">Личные рекорды</p><h2>Лучшие результаты</h2></div><Medal size={24} /></div>
-        {recordRows.length ? <div className="records-grid">{recordRows.map((record) => <article key={record.normalizedName}><span className="record-icon"><Dumbbell size={19} aria-hidden="true" /></span><div><h3>{record.displayName}</h3>{record.weight && <p>Рабочий вес: {record.weight.value} кг</p>}{record.volume && <small>Максимальный объём: {Math.round(record.volume.value)} кг</small>}{record.reps && <p>Повторы без веса: {record.reps.value}</p>}</div></article>)}</div> : <p className="muted-copy">Добавь фактический вес или повторы и заверши тренировку — рекорды появятся здесь.</p>}
-      </section>
+      <DaySummary
+        date={selectedDay.date}
+        points={selectedDay.points}
+        workouts={selectedWorkouts}
+        weightEntry={selectedWeight}
+        today={today}
+      />
 
       <BodyWeightPanel entries={bodyWeightEntries} today={today} onSave={onSaveWeight} onDelete={onDeleteWeight} />
     </>
