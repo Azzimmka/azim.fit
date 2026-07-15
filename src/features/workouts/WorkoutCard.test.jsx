@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WorkoutCard } from './WorkoutCard.jsx';
@@ -12,10 +12,7 @@ const workout = {
   status: 'planned',
   plannedDate: '2026-07-13',
   time: '18:00',
-  durationMinutes: 50,
   intensity: 'Средняя',
-  planNotes: '',
-  resultNotes: '',
   pointsAwarded: 0,
   exercises: [{
     id: 'exercise-1',
@@ -25,30 +22,11 @@ const workout = {
     plannedWeightKg: 60,
     restSeconds: 90,
     completedSets: 0,
-    actualWeightKg: null,
-    actualReps: null,
-    rpe: null,
-  }],
-};
-
-const perSetWorkout = {
-  ...workout,
-  exercises: [{
-    ...workout.exercises[0],
-    completedSets: 2,
-    actualWeightKg: 70,
-    actualReps: 8,
-    rpe: 8,
-    setResults: [
-      { setNumber: 1, status: 'completed', weightKg: 60, reps: 10, rpe: 7, completedAt: null },
-      { setNumber: 2, status: 'completed', weightKg: 70, reps: 8, rpe: 8, completedAt: null },
-      { setNumber: 3, status: 'skipped', weightKg: null, reps: null, rpe: null, completedAt: null },
-    ],
   }],
 };
 
 describe('WorkoutCard', () => {
-  it('opens an available session from the card surface and keyboard', async () => {
+  it('opens an available session from the free card surface and keyboard', async () => {
     const user = userEvent.setup();
     const onStartSession = vi.fn();
 
@@ -60,7 +38,7 @@ describe('WorkoutCard', () => {
       />,
     );
 
-    const card = screen.getByRole('article', { name: 'Начать или продолжить тренировку «Ноги»' });
+    const card = screen.getByRole('article', { name: 'Начать тренировку «Ноги»' });
     await user.click(card);
     fireEvent.keyDown(card, { key: 'Enter' });
     fireEvent.keyDown(card, { key: ' ' });
@@ -69,108 +47,138 @@ describe('WorkoutCard', () => {
     expect(onStartSession).toHaveBeenLastCalledWith(workout);
   });
 
-  it('does not open the session when a nested control is used', async () => {
+  it('renders only the workout preview and emphasizes the plan', () => {
+    render(
+      <WorkoutCard
+        workout={workout}
+        today="2026-07-13"
+        onStartSession={() => {}}
+      />,
+    );
+
+    expect(screen.getByRole('heading', { name: 'Ноги' })).toBeVisible();
+    expect(screen.getByText('10 повторов · 60 кг')).toBeVisible();
+    expect(screen.getByLabelText('3 подхода')).toHaveTextContent('3подхода');
+    expect(screen.getByRole('button', { name: 'Начать' })).toBeVisible();
+    expect(screen.queryByRole('button', { name: '90 сек' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Результат' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Отмечай подходы по ходу тренировки')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Подтвердить выполнение/ })).not.toBeInTheDocument();
+  });
+
+  it('starts the session once from the nested lime action', async () => {
     const user = userEvent.setup();
     const onStartSession = vi.fn();
-    const onStartTimer = vi.fn();
 
     render(
       <WorkoutCard
         workout={workout}
         today="2026-07-13"
         onStartSession={onStartSession}
-        onStartTimer={onStartTimer}
       />,
     );
 
-    await user.click(screen.getByRole('button', { name: '90 сек' }));
-    expect(onStartTimer).toHaveBeenCalledOnce();
+    await user.click(screen.getByRole('button', { name: 'Начать' }));
+    expect(onStartSession).toHaveBeenCalledOnce();
+    expect(onStartSession).toHaveBeenCalledWith(workout);
+  });
+
+  it('keeps menu actions independent from session navigation', async () => {
+    const user = userEvent.setup();
+    const onStartSession = vi.fn();
+    const onDelete = vi.fn();
+
+    render(
+      <WorkoutCard
+        workout={workout}
+        today="2026-07-13"
+        onStartSession={onStartSession}
+        onDelete={onDelete}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Действия: Ноги' }));
+    await user.click(screen.getByRole('button', { name: 'Удалить' }));
+
+    expect(onDelete).toHaveBeenCalledWith(workout);
     expect(onStartSession).not.toHaveBeenCalled();
   });
 
-  it('starts rest for the selected workout and exercise with one button press', async () => {
-    const user = userEvent.setup();
-    const onStartTimer = vi.fn();
-
+  it('disables a future workout and labels it as scheduled', () => {
     render(
       <WorkoutCard
-        workout={workout}
+        workout={{ ...workout, plannedDate: '2026-07-14' }}
         today="2026-07-13"
-        onStartTimer={onStartTimer}
+        onStartSession={() => {}}
       />,
     );
 
-    await user.click(screen.getByRole('button', { name: '90 сек' }));
-    expect(onStartTimer).toHaveBeenCalledWith(workout, workout.exercises[0]);
+    const card = screen.getByRole('article');
+    expect(card).not.toHaveAttribute('tabindex');
+    expect(screen.getByRole('button', { name: 'Запланировано' })).toBeDisabled();
   });
 
-  it('exposes the draft result note only through its dedicated callback', async () => {
+  it('keeps a completed workout static while preserving its menu actions', async () => {
     const user = userEvent.setup();
-    const onUpdateResultNotes = vi.fn();
+    const onOpen = vi.fn();
+    const onStartSession = vi.fn();
+    const onCorrectResult = vi.fn();
+    const completedWorkout = {
+      ...workout,
+      status: 'completed',
+      pointsAwarded: 35,
+    };
 
     render(
       <WorkoutCard
-        workout={workout}
+        workout={completedWorkout}
         today="2026-07-13"
-        onUpdateResult={() => {}}
-        onUpdateResultNotes={onUpdateResultNotes}
+        onOpen={onOpen}
+        onStartSession={onStartSession}
+        onCorrectResult={onCorrectResult}
       />,
     );
 
-    await user.click(screen.getByRole('button', { name: 'Результат' }));
-    const notes = screen.getByLabelText('Итоговая заметка');
-    fireEvent.change(notes, { target: { value: 'Легко' } });
+    const card = screen.getByRole('article');
+    expect(screen.getByRole('status')).toHaveTextContent('Завершена · +35 баллов');
+    expect(screen.queryByRole('button', { name: 'Посмотреть результат' })).not.toBeInTheDocument();
+    expect(card).not.toHaveAttribute('tabindex');
 
-    expect(onUpdateResultNotes).toHaveBeenCalledWith('workout-1', 'Легко');
+    await user.click(card);
+    fireEvent.keyDown(card, { key: 'Enter' });
+    fireEvent.keyDown(card, { key: ' ' });
+    expect(onOpen).not.toHaveBeenCalled();
+    expect(onStartSession).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('button', { name: 'Действия: Ноги' }));
+    await user.click(screen.getByRole('button', { name: 'Исправить результат' }));
+    expect(onCorrectResult).toHaveBeenCalledWith(completedWorkout);
   });
 
-  it('renders and toggles each real set status independently', async () => {
-    const user = userEvent.setup();
-    const onToggleSet = vi.fn();
-
+  it('does not render a completed-result action in the compact card', () => {
     render(
       <WorkoutCard
-        workout={perSetWorkout}
+        compact
+        workout={{ ...workout, status: 'completed', pointsAwarded: 35 }}
         today="2026-07-13"
-        onToggleSet={onToggleSet}
+        onOpen={() => {}}
       />,
     );
 
-    expect(screen.getByRole('button', { name: 'Подход 1: выполнен' })).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByRole('button', { name: 'Подход 2: выполнен' })).toHaveAttribute('aria-pressed', 'true');
-    const skippedSet = screen.getByRole('button', { name: 'Подход 3: пропущен' });
-    expect(skippedSet).toHaveClass('skipped');
-
-    await user.click(skippedSet);
-    expect(onToggleSet).toHaveBeenCalledOnce();
-    expect(onToggleSet).toHaveBeenCalledWith('workout-1', 'exercise-1', 2);
+    expect(screen.queryByRole('button', { name: 'Посмотреть результат' })).not.toBeInTheDocument();
   });
 
-  it('edits the selected or last completed set in the compact result block', async () => {
-    const user = userEvent.setup();
-    const onToggleSet = vi.fn();
-    const onUpdateResult = vi.fn();
-
+  it('uses the same contextual action in the compact card', () => {
     render(
       <WorkoutCard
-        workout={perSetWorkout}
+        compact
+        workout={{ ...workout, plannedDate: '2026-07-14' }}
         today="2026-07-13"
-        onToggleSet={onToggleSet}
-        onUpdateResult={onUpdateResult}
+        onStartSession={() => {}}
       />,
     );
 
-    await user.click(screen.getByRole('button', { name: 'Результат' }));
-    expect(screen.getByText('Подход 2')).toBeInTheDocument();
-    const weight = screen.getByLabelText('Вес, кг');
-    expect(weight).toHaveValue(70);
-    fireEvent.change(weight, { target: { value: '72.5' } });
-    expect(onUpdateResult).toHaveBeenLastCalledWith(
-      'workout-1', 'exercise-1', 1, 'actualWeightKg', '72.5',
-    );
-
-    await user.click(screen.getByRole('button', { name: 'Подход 1: выполнен' }));
-    expect(screen.getByText('Подход 1')).toBeInTheDocument();
-    expect(screen.getByLabelText('Вес, кг')).toHaveValue(60);
+    const card = screen.getByRole('article');
+    expect(within(card).getByRole('button', { name: 'Запланировано' })).toBeDisabled();
   });
 });

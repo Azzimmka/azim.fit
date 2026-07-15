@@ -7,6 +7,7 @@ import {
   completeWorkoutSet,
   correctWorkoutResult,
   findFirstPendingWorkoutSet,
+  getPlannedBodyweightSetResult,
   getWorkoutSetDefaults,
   skipRemainingExerciseSets,
   startWorkoutSession,
@@ -34,6 +35,21 @@ function plannedWorkout(overrides = {}) {
 }
 
 describe('per-set workout operations', () => {
+  it('derives guided bodyweight results only from valid numeric plans', () => {
+    expect(getPlannedBodyweightSetResult({ plannedReps: '15', plannedWeightKg: 80 })).toEqual({
+      weightKg: null,
+      reps: 15,
+      rpe: null,
+    });
+    expect(getPlannedBodyweightSetResult({ plannedReps: '30 сек' })).toEqual({
+      weightKg: null,
+      reps: null,
+      rpe: null,
+    });
+    expect(getPlannedBodyweightSetResult({ plannedReps: '0' }).reps).toBeNull();
+    expect(getPlannedBodyweightSetResult({ plannedReps: '1000' }).reps).toBeNull();
+  });
+
   it('starts once and restores the first pending set', () => {
     const initial = plannedWorkout();
     const started = startWorkoutSession(initial, '2026-07-13T10:00:00.000Z');

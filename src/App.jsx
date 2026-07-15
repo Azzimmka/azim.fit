@@ -614,17 +614,6 @@ function AppContent({ authState }) {
     setScopeRequest(null);
   };
 
-  const updateResultDraft = (workoutId, exerciseId, setIndex, field, value) => {
-    const parsed = value === '' ? null : Number(value);
-    dispatch({
-      type: ActionTypes.WORKOUT_UPDATE_RESULT,
-      payload: {
-        workoutId,
-        result: { exercises: [{ id: exerciseId, setIndex, [field]: parsed }] },
-      },
-    });
-  };
-
   const completeWorkout = (workout, options = {}) => {
     const action = {
       type: ActionTypes.WORKOUT_COMPLETE,
@@ -661,16 +650,16 @@ function AppContent({ authState }) {
   };
 
   const workoutActions = {
-    onOpen: (workout) => {
-      const destination = workout.status === 'planned' && workout.plannedDate <= today
-        ? `/workouts/${workout.id}/session`
-        : `/workouts/${workout.id}`;
-      navigate(destination, {
+    onStartSession: (workout) => {
+      navigate(`/workouts/${workout.id}/session`, {
         state: { returnTo: `${location.pathname}${location.search}` },
       });
     },
-    onToggleSet: (workoutId, exerciseId, index) => dispatch({ type: ActionTypes.WORKOUT_TOGGLE_SET, payload: { workoutId, exerciseId, index } }),
-    onComplete: completeWorkout,
+    onOpen: (workout) => {
+      navigate(`/workouts/${workout.id}`, {
+        state: { returnTo: `${location.pathname}${location.search}` },
+      });
+    },
     onEdit: (workout) => setEditor({ mode: 'edit', workout, initialDate: workout.plannedDate }),
     onReschedule: (workout) => setEditor({ mode: 'reschedule', workout, initialDate: workout.plannedDate }),
     onDuplicate: (workout) => setEditor({ mode: 'duplicate', workout, initialDate: workout.plannedDate }),
@@ -684,21 +673,6 @@ function AppContent({ authState }) {
       setNotice({ variant: 'info', title: 'Тренировка отмечена пропущенной' });
     },
     onCorrectResult: (workout) => setEditor({ mode: 'result', workout, initialDate: workout.plannedDate }),
-    onUpdateResult: updateResultDraft,
-    onUpdateResultNotes: (workoutId, resultNotes) => dispatch({
-      type: ActionTypes.WORKOUT_UPDATE_RESULT,
-      payload: { workoutId, result: { resultNotes } },
-    }),
-    onStartTimer: (workout, exercise) => {
-      void prepareTimerSound();
-      dispatch({
-        type: ActionTypes.WORKOUT_START_REST,
-        payload: {
-          workoutId: workout.id,
-          exerciseId: exercise.id,
-        },
-      });
-    },
   };
 
   const templateActions = {
@@ -717,9 +691,9 @@ function AppContent({ authState }) {
   const timerSnapshot = getTimerSnapshot(state.activeTimer);
   useTimerCompletionSound(timerSnapshot);
   useEffect(() => {
-    if (!timerSnapshot.expired) return;
+    if (!timerSnapshot.expired || timerSnapshot.workoutId) return;
     dispatch({ type: ActionTypes.TIMER_FINISH });
-  }, [timerSnapshot.endsAt, timerSnapshot.expired]);
+  }, [timerSnapshot.endsAt, timerSnapshot.expired, timerSnapshot.workoutId]);
   const timerWorkout = state.workouts.find((workout) => workout.id === timerSnapshot.workoutId);
   const timerExercise = timerWorkout?.exercises.find((exercise) => exercise.id === timerSnapshot.exerciseId);
   const sessionActions = {
@@ -757,7 +731,10 @@ function AppContent({ authState }) {
       type: ActionTypes.TIMER_ADD_SECONDS,
       payload: { seconds: 30 },
     }),
-    onSkipRest: () => dispatch({ type: ActionTypes.TIMER_FINISH }),
+    onContinueRest: (workoutId) => dispatch({
+      type: ActionTypes.WORKOUT_SESSION_CONTINUE_REST,
+      payload: { workoutId },
+    }),
   };
 
   const handleLogout = async () => {

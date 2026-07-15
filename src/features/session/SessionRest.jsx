@@ -17,7 +17,7 @@ export function SessionRest({
   onPause,
   onResume,
   onAddThirty,
-  onSkip,
+  onContinue,
 }) {
   const paused = timerSnapshot?.status === 'paused';
   const expired = timerSnapshot?.status === 'expired';
@@ -60,8 +60,9 @@ export function SessionRest({
         </button>
       </div>
 
-      <button type="button" className="session-primary-action session-skip-rest" onClick={onSkip} disabled={!onSkip}>
-        <SkipForward size={20} aria-hidden="true" /> Пропустить отдых
+      <button type="button" className="session-primary-action session-continue-rest" onClick={onContinue} disabled={!onContinue}>
+        <SkipForward size={20} aria-hidden="true" />
+        {sameExercise ? 'Начать следующий подход' : nextExercise ? 'Начать упражнение' : 'Перейти к итогам'}
       </button>
     </section>
   );

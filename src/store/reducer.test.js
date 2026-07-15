@@ -174,6 +174,73 @@ describe('appReducer', () => {
     expect(state).toBe(afterFirst);
   });
 
+  it('stores planned bodyweight repetitions and waits for explicit rest continuation', () => {
+    const workout = normalizeWorkout({
+      id: 'guided-session',
+      status: 'planned',
+      plannedDate: '2026-07-13',
+      exercises: [
+        { id: 'push-up', name: 'Отжимания', sets: 1, plannedReps: '12', restSeconds: 60 },
+        { id: 'plank', name: 'Планка', sets: 1, plannedReps: '30 сек', restSeconds: 90 },
+      ],
+    });
+    const initial = { ...createEmptyAppState(), workouts: [workout] };
+    const afterFirstSet = appReducer(initial, {
+      type: ActionTypes.WORKOUT_SESSION_COMPLETE_SET,
+      payload: {
+        workoutId: 'guided-session',
+        exerciseId: 'push-up',
+        setIndex: 0,
+        now: '2026-07-13T10:00:00.000Z',
+      },
+    });
+
+    expect(afterFirstSet.workouts[0].exercises[0].setResults[0]).toMatchObject({
+      status: 'completed',
+      weightKg: null,
+      reps: 12,
+      rpe: null,
+      completedAt: '2026-07-13T10:00:00.000Z',
+    });
+    expect(afterFirstSet.activeTimer).toMatchObject({
+      workoutId: 'guided-session',
+      exerciseId: 'push-up',
+      initialSeconds: 60,
+    });
+
+    expect(appReducer(afterFirstSet, {
+      type: ActionTypes.WORKOUT_SESSION_CONTINUE_REST,
+      payload: { workoutId: 'another-workout' },
+    })).toBe(afterFirstSet);
+
+    const afterContinue = appReducer(afterFirstSet, {
+      type: ActionTypes.WORKOUT_SESSION_CONTINUE_REST,
+      payload: { workoutId: 'guided-session' },
+    });
+    expect(afterContinue.activeTimer).toBeNull();
+    expect(appReducer(afterContinue, {
+      type: ActionTypes.WORKOUT_SESSION_CONTINUE_REST,
+      payload: { workoutId: 'guided-session' },
+    })).toBe(afterContinue);
+
+    const afterLastSet = appReducer(afterContinue, {
+      type: ActionTypes.WORKOUT_SESSION_COMPLETE_SET,
+      payload: {
+        workoutId: 'guided-session',
+        exerciseId: 'plank',
+        setIndex: 0,
+        now: '2026-07-13T10:02:00.000Z',
+      },
+    });
+    expect(afterLastSet.workouts[0].exercises[1].setResults[0]).toMatchObject({
+      status: 'completed',
+      weightKg: null,
+      reps: null,
+      rpe: null,
+    });
+    expect(afterLastSet.activeTimer).toBeNull();
+  });
+
   it('completes a set with rest zero and rejects invalid set values', () => {
     const workout = normalizeWorkout({
       id: 'session-zero',

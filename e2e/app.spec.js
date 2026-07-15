@@ -39,6 +39,30 @@ async function waitForServiceWorkerControl(page) {
   });
 }
 
+async function finishGuidedWorkout(page) {
+  const getNextAction = async () => {
+    if (await page.getByRole('heading', { name: 'Тренировка собрана', level: 1 }).isVisible()) return 'summary';
+    if (await page.getByRole('button', { name: 'Подход выполнен' }).isVisible()) return 'complete';
+    if (await page.getByRole('button', { name: /^(Начать следующий подход|Начать упражнение)$/ }).isVisible()) return 'continue';
+    return null;
+  };
+
+  for (let step = 0; step < 60; step += 1) {
+    await expect.poll(getNextAction).toMatch(/^(summary|complete|continue)$/);
+    const action = await getNextAction();
+    if (action === 'summary') return;
+    if (action === 'complete') {
+      await page.getByRole('button', { name: 'Подход выполнен' }).click();
+      continue;
+    }
+    if (action === 'continue') {
+      await page.getByRole('button', { name: /^(Начать следующий подход|Начать упражнение)$/ }).click();
+      continue;
+    }
+  }
+  throw new Error('Активная тренировка не завершилась за 60 шагов');
+}
+
 test('маршруты авторизации доступны, а гостевой режим остаётся необязательным', async ({ page }) => {
   await page.goto('/login');
   await expect(page.getByRole('heading', { name: 'Войти в KEEP AT IT' })).toBeVisible();
@@ -130,57 +154,20 @@ test('демо-шаблон создаёт независимую трениро
   expect(templateLinkage.sameExerciseReferenceIsImpossibleAfterSerialization).toBe(true);
 });
 
-test('запуск отдыха отмечает следующий подход и подаёт сигнал при завершении', async ({ page }) => {
-  await page.addInitScript(() => {
-    window.__timerToneStarts = 0;
-    class TestAudioContext {
-      constructor() {
-        this.currentTime = 0;
-        this.destination = {};
-        this.state = 'suspended';
-      }
-
-      resume() {
-        this.state = 'running';
-        return Promise.resolve();
-      }
-
-      createOscillator() {
-        return {
-          type: 'sine',
-          frequency: { setValueAtTime() {} },
-          connect() {},
-          start() { window.__timerToneStarts += 1; },
-          stop() {},
-        };
-      }
-
-      createGain() {
-        return {
-          connect() {},
-          gain: {
-            setValueAtTime() {},
-            exponentialRampToValueAtTime() {},
-          },
-        };
-      }
-    }
-    Object.defineProperty(window, 'AudioContext', { configurable: true, value: TestAudioContext });
-  });
-  await page.clock.install();
+test('preview-карточка показывает план без ручных контролов и открывает сессию', async ({ page }) => {
   await loadDemo(page);
   await page.goto('/today');
 
   const card = workoutCard(page, 'Верх тела');
-  const firstSet = card.locator('button.set-dot').first();
-  await card.getByRole('button', { name: '90 сек' }).first().click();
+  await expect(card.getByRole('heading', { name: 'Верх тела' })).toBeVisible();
+  await expect(card.locator('.exercise-set-count').first()).toContainText('4подхода');
+  await expect(card.locator('button.set-dot')).toHaveCount(0);
+  await expect(card.getByRole('button', { name: '90 сек' })).toHaveCount(0);
+  await expect(card.getByRole('button', { name: 'Результат' })).toHaveCount(0);
+  await expect(card.getByText('Отмечай подходы по ходу тренировки')).toHaveCount(0);
 
-  await expect(firstSet).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.locator('.rest-timer-time')).toHaveText('01:30');
-
-  await page.clock.fastForward(90_500);
-  await expect(page.locator('.rest-timer')).toHaveCount(0);
-  await expect.poll(() => page.evaluate(() => window.__timerToneStarts)).toBe(10);
+  await card.getByRole('button', { name: 'Начать' }).click();
+  await expect(page).toHaveURL(/\/workouts\/demo-today\/session$/);
 });
 
 test('активная тренировка сохраняет per-set прогресс и завершается через summary', async ({ page }) => {
@@ -188,48 +175,69 @@ test('активная тренировка сохраняет per-set прог�
   await page.goto('/today');
 
   const card = workoutCard(page, 'Верх тела');
-  await card.locator('.workout-title-wrap').click();
+  await card.getByRole('button', { name: 'Начать' }).click();
   await expect(page).toHaveURL(/\/workouts\/demo-today\/session$/);
   await expect(page.locator('.sidebar, .mobile-nav, .mobile-topbar')).toHaveCount(0);
   await expect(page.getByRole('heading', { name: 'Отжимания', level: 1 })).toBeVisible();
   await expectNoHorizontalOverflow(page);
+  await expect(page.getByText('Подход 1 из 4')).toBeVisible();
+  await expect(page.locator('.session-set-instruction > strong')).toHaveText('12');
+  await expect(page.getByRole('spinbutton')).toHaveCount(0);
 
-  await page.getByLabel('RPE').fill('7');
-  await page.getByRole('button', { name: 'Выполнить подход и начать отдых' }).click();
+  await page.getByRole('button', { name: 'Подход выполнен' }).click();
   await expect(page.getByRole('progressbar', { name: 'Прогресс тренировки' })).toContainText('1/7');
   await expect(page.locator('.session-timer-digits')).toHaveText('01:30');
   await expect(page.getByText('Следующий подход', { exact: true })).toBeVisible();
 
-  await page.getByRole('button', { name: 'Пропустить отдых' }).click();
-  await expect(page.getByText('Подход 2 из 4', { exact: false })).toBeVisible();
-  await expect(page.getByLabel('RPE')).toHaveValue('7');
+  await page.evaluate((key) => {
+    const state = JSON.parse(localStorage.getItem(key));
+    state.activeTimer.endsAt = new Date(Date.now() - 1_000).toISOString();
+    localStorage.setItem(key, JSON.stringify(state));
+  }, STORAGE_KEY);
+  await page.reload();
+  await expect(page.locator('.session-timer-digits')).toHaveText('00:00');
+  await expect(page.getByText('Отдых завершён')).toBeVisible();
+  await page.waitForTimeout(150);
+  await expect(page.locator('.session-timer-digits')).toHaveText('00:00');
+  await page.getByRole('button', { name: '30 сек' }).click();
+  await expect(page.getByText('Отдых завершён')).toHaveCount(0);
 
-  await page.getByLabel('Повторы').fill('15');
-  await page.getByLabel('RPE').fill('8');
-  await page.getByRole('button', { name: 'Выполнить подход и начать отдых' }).click();
-  await page.getByRole('button', { name: 'Пропустить отдых' }).click();
+  await page.getByRole('button', { name: 'Начать следующий подход' }).click();
+  await expect(page.getByText('Подход 2 из 4', { exact: false })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Подход выполнен' }).click();
+  await expect(page.locator('.session-timer-digits')).toHaveText('01:30');
+
+  await page.reload();
+  await expect(page.locator('.session-timer-digits')).toBeVisible();
+  await expect(page.getByRole('progressbar', { name: 'Прогресс тренировки' })).toContainText('2/7');
+  await page.getByRole('button', { name: 'Начать следующий подход' }).click();
   await expect(page.getByText('Подход 3 из 4', { exact: false })).toBeVisible();
 
   await page.reload();
   await expect(page.getByText('Подход 3 из 4', { exact: false })).toBeVisible();
-  await expect(page.getByRole('progressbar', { name: 'Прогресс тренировки' })).toContainText('2/7');
+  await expect(page.getByRole('heading', { name: 'Отжимания', level: 1 })).toBeVisible();
 
-  await page.getByRole('button', { name: 'Пропустить упражнение' }).click();
+  await page.getByRole('button', { name: 'Подход выполнен' }).click();
+  await page.getByRole('button', { name: 'Начать следующий подход' }).click();
+  await page.getByRole('button', { name: 'Подход выполнен' }).click();
+  await expect(page.getByText('Следующее упражнение')).toBeVisible();
+  await expect(page.getByText('Тяга гантели', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Начать упражнение' }).click();
   await expect(page.getByRole('heading', { name: 'Тяга гантели', level: 1 })).toBeVisible();
-  await page.getByRole('button', { name: 'Пропустить упражнение' }).click();
+
+  await finishGuidedWorkout(page);
   await expect(page.getByRole('heading', { name: 'Тренировка собрана', level: 1 })).toBeVisible();
-  await expect(page.locator('.session-summary-metrics')).toContainText('+30');
+  await expect(page.locator('.session-rest')).toHaveCount(0);
+  await expect(page.locator('.session-summary-metrics')).toContainText('+55');
 
   await page.getByRole('button', { name: 'Исправить результаты' }).click();
-  await page.getByRole('button', { name: /Тяга гантели.*0\/3 выполнено/ }).click();
-  await page.getByLabel('Вес, кг').fill('18');
-  await page.getByLabel('Повторы').fill('10');
-  await page.getByLabel('RPE').fill('8');
-  await page.getByRole('button', { name: 'Выполнить подход и начать отдых' }).click();
-  await expect(page.locator('.session-rest')).toHaveCount(0);
+  await expect(page.getByText('Вес, кг')).toHaveCount(0);
+  await expect(page.getByText('RPE')).toHaveCount(0);
+  await page.getByRole('spinbutton', { name: 'Повторы: Отжимания, подход 1' }).fill('15');
+  await page.getByRole('button', { name: 'Сохранить изменения' }).click();
   await expect(page.getByRole('heading', { name: 'Тренировка собрана', level: 1 })).toBeVisible();
-  await expect(page.locator('.session-summary-metrics')).toContainText('+35');
-  await expect(page.locator('.session-summary-metrics')).toContainText('180');
+  await expect(page.locator('.session-summary-metrics')).toContainText('+55');
 
   await page.getByRole('button', { name: 'Завершить тренировку' }).click();
   await expect(page).toHaveURL(/\/workouts\/demo-today$/);
@@ -252,9 +260,9 @@ test('активная тренировка сохраняет per-set прог�
   }, STORAGE_KEY);
   expect(result).toMatchObject({
     status: 'completed',
-    completedSets: 3,
-    pointsAwarded: 35,
-    pushUpResults: [{ reps: 12, rpe: 7 }, { reps: 15, rpe: 8 }],
+    completedSets: 7,
+    pointsAwarded: 55,
+    pushUpResults: [{ reps: 15, rpe: null }, { reps: 12, rpe: null }],
   });
   expect(result.startedAt).toBeTruthy();
 });
@@ -408,16 +416,13 @@ test('пропущенную тренировку можно выполнить 
 
   const card = workoutCard(page, 'Кардио и мобильность');
   await expect(card).toBeVisible();
-  const setButtons = card.locator('button.set-dot');
-  const totalSets = await setButtons.count();
-  expect(totalSets).toBeGreaterThan(0);
-  for (let index = 0; index < totalSets; index += 1) {
-    await setButtons.nth(index).click();
-  }
+  await card.getByRole('button', { name: 'Начать' }).click();
+  await expect(page).toHaveURL(/\/workouts\/demo-missed\/session$/);
 
-  const complete = card.getByRole('button', { name: 'Завершить сейчас' });
-  await expect(complete).toBeEnabled();
-  await complete.click();
+  await finishGuidedWorkout(page);
+
+  await expect(page.getByRole('heading', { name: 'Тренировка собрана', level: 1 })).toBeVisible();
+  await page.getByRole('button', { name: 'Завершить тренировку' }).click();
   await expect(page.locator('.toast')).toContainText(/Тренировка завершена|Новый личный рекорд/);
   await expect(workoutCard(page, 'Кардио и мобильность')).toHaveCount(0);
 
@@ -510,7 +515,7 @@ test('после первого online-запуска приложение пе�
   await page.goto('/today');
   await waitForServiceWorkerControl(page);
   await expect(workoutCard(page, 'Верх тела')).toBeVisible();
-  await workoutCard(page, 'Верх тела').locator('.workout-title-wrap').click();
+  await workoutCard(page, 'Верх тела').getByRole('button', { name: 'Начать' }).click();
   await expect(page).toHaveURL(/\/workouts\/demo-today\/session$/);
 
   try {

@@ -28,6 +28,8 @@ import {
   completeWorkout,
   correctWorkoutResult,
   duplicateWorkout,
+  findFirstPendingWorkoutSet,
+  getPlannedBodyweightSetResult,
   rescheduleWorkout,
   skipRemainingExerciseSets,
   skipWorkout,
@@ -71,6 +73,8 @@ export const ActionTypes = Object.freeze({
   WORKOUT_UPDATE_SET: 'workout/session-update-set',
   WORKOUT_SESSION_COMPLETE_SET: 'workout/session-complete-set',
   WORKOUT_COMPLETE_SET: 'workout/session-complete-set',
+  WORKOUT_SESSION_CONTINUE_REST: 'workout/session-continue-rest',
+  WORKOUT_CONTINUE_AFTER_REST: 'workout/session-continue-rest',
   WORKOUT_SESSION_SKIP_EXERCISE: 'workout/session-skip-exercise',
   WORKOUT_SKIP_EXERCISE: 'workout/session-skip-exercise',
   TIMER_START: 'timer/start',
@@ -342,7 +346,9 @@ export function appReducer(currentState, action) {
       if (!target || target.status !== 'planned') return state;
       const exercise = target.exercises.find((item) => item.id === payload.exerciseId);
       if (!exercise) return state;
-      const result = payload.result ?? payload.values ?? {};
+      const result = payload.result
+        ?? payload.values
+        ?? getPlannedBodyweightSetResult(exercise);
       const nextWorkout = completeWorkoutSet(
         target,
         exercise.id,
@@ -356,16 +362,26 @@ export function appReducer(currentState, action) {
       const workouts = state.workouts.map((workout) => (
         workout.id === workoutId ? nextWorkout : workout
       ));
+      const nextPendingSet = findFirstPendingWorkoutSet(nextWorkout);
+      const shouldStartRest = payload.skipRest !== true
+        && Boolean(nextPendingSet)
+        && Number(exercise.restSeconds) > 0;
       return {
         ...withWorkouts(state, workouts),
-        activeTimer: payload.skipRest === true
-          ? null
-          : startRestTimer(exercise.restSeconds, {
+        activeTimer: shouldStartRest
+          ? startRestTimer(exercise.restSeconds, {
             ...payload,
             workoutId,
             exerciseId: exercise.id,
-          }),
+          })
+          : null,
       };
+    }
+
+    case ActionTypes.WORKOUT_SESSION_CONTINUE_REST: {
+      const workoutId = payload.workoutId ?? payload.id;
+      if (!state.activeTimer || state.activeTimer.workoutId !== workoutId) return state;
+      return { ...state, activeTimer: null };
     }
 
     case ActionTypes.WORKOUT_SESSION_SKIP_EXERCISE: {

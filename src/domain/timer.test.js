@@ -40,5 +40,16 @@ describe('global rest timer', () => {
       remainingSeconds: 0,
     }));
   });
-});
 
+  it('restarts an expired timer when thirty seconds are added', () => {
+    const timer = startRestTimer(15, { now: start, workoutId: 'w', exerciseId: 'e' });
+    const extended = addRestTimerSeconds(timer, 30, '2026-07-13T10:01:00.000Z');
+    expect(extended.endsAt).toBe('2026-07-13T10:01:30.000Z');
+    expect(getTimerSnapshot(extended, '2026-07-13T10:01:00.000Z')).toMatchObject({
+      status: 'running',
+      remainingSeconds: 30,
+      workoutId: 'w',
+      exerciseId: 'e',
+    });
+  });
+});

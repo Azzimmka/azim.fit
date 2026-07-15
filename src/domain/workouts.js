@@ -168,6 +168,24 @@ export function getWorkoutSetDefaults(workout, exerciseId, setIndex, previousWor
   };
 }
 
+/**
+ * Converts a bodyweight exercise plan into the result stored by the guided
+ * session. Non-numeric plans (for example, "30 сек") deliberately keep reps
+ * empty instead of inventing a value.
+ * @param {import('./model.js').Exercise} exercise
+ */
+export function getPlannedBodyweightSetResult(exercise) {
+  const plannedRepsText = String(exercise?.plannedReps ?? '').trim();
+  const plannedReps = /^\d+$/.test(plannedRepsText) ? Number(plannedRepsText) : null;
+  return {
+    weightKg: null,
+    reps: Number.isInteger(plannedReps) && plannedReps >= 1 && plannedReps <= 999
+      ? plannedReps
+      : null,
+    rpe: null,
+  };
+}
+
 /** @param {import('./model.js').Exercise} exercise */
 export function calculateExerciseVolume(exercise) {
   return completedSetResults(exercise).reduce((sum, result) => {
