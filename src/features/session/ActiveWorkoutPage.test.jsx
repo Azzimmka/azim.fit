@@ -98,8 +98,7 @@ describe('ActiveWorkoutPage', () => {
 
     render(<ActiveWorkoutPage {...baseProps} workout={workout} workouts={[workout]} onCompleteSet={onCompleteSet} />);
     const weight = screen.getByLabelText('Вес, кг');
-    await user.clear(weight);
-    await user.type(weight, '0');
+    fireEvent.change(weight, { target: { value: '0' } });
     await user.click(screen.getByRole('button', { name: 'Выполнить подход и начать отдых' }));
 
     expect(screen.getByRole('alert')).toHaveTextContent('Укажи вес от 0,5 до 1000 кг');

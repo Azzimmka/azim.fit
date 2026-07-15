@@ -71,6 +71,8 @@
  * @property {string} updatedAt
  *
  * @typedef {Object} AppSettings
+ * @property {'google'|'generated'|undefined} [avatarSource]
+ * @property {string|undefined} [avatarId]
  *
  * @typedef {Object} ActiveTimer
  * @property {'running'|'paused'} status

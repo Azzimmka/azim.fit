@@ -20,6 +20,8 @@ import {
 import { calculateAwardedPoints } from './points.js';
 import { normalizeActiveTimerForWorkouts, normalizeRestSeconds } from './timer.js';
 
+const PROFILE_AVATAR_ID_PATTERN = /^avatar-(0[1-9]|10)$/;
+
 function isRecord(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
@@ -331,8 +333,19 @@ export function normalizeBodyWeightEntry(input, options = {}) {
 }
 
 /** @param {unknown} input */
-export function normalizeSettings() {
-  return {};
+export function normalizeSettings(input) {
+  if (!isRecord(input)) return {};
+  const avatarSource = input.avatarSource === 'google' || input.avatarSource === 'generated'
+    ? input.avatarSource
+    : undefined;
+  const avatarId = typeof input.avatarId === 'string' && PROFILE_AVATAR_ID_PATTERN.test(input.avatarId)
+    ? input.avatarId
+    : undefined;
+  if (!avatarSource && !avatarId) return {};
+  return {
+    ...(avatarSource ? { avatarSource } : {}),
+    ...(avatarId ? { avatarId } : {}),
+  };
 }
 
 /** @returns {import('./model.js').AppStateV2} */

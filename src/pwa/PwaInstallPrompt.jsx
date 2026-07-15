@@ -16,7 +16,7 @@ export function PwaInstallPrompt({ className = 'pwa-install-prompt' }) {
     return (
       <aside className={className} aria-labelledby="pwa-install-title">
         <div>
-          <strong id="pwa-install-title">Добавить AZIM.FIT на экран «Домой»</strong>
+          <strong id="pwa-install-title">Добавить KEEP AT IT на экран «Домой»</strong>
           <p>В Safari нажмите «Поделиться», затем «На экран Домой».</p>
         </div>
         <button type="button" onClick={dismiss} aria-label="Скрыть инструкцию по установке">
@@ -31,7 +31,7 @@ export function PwaInstallPrompt({ className = 'pwa-install-prompt' }) {
   return (
     <aside className={className} aria-live="polite" aria-labelledby="pwa-install-title">
       <div>
-        <strong id="pwa-install-title">Установить AZIM.FIT</strong>
+        <strong id="pwa-install-title">Установить KEEP AT IT</strong>
         <p>Тренировки останутся доступны с домашнего экрана и без сети.</p>
       </div>
       <div>

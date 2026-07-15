@@ -102,6 +102,7 @@ function ActiveWorkoutSession({
   const fieldRefs = useRef({});
   const startedWorkoutIdRef = useRef(null);
   const previousTimerForWorkoutRef = useRef(false);
+  const previousFocusTargetRef = useRef('');
 
   const timerForWorkout = Boolean(
     workout
@@ -171,7 +172,17 @@ function ActiveWorkoutSession({
       rest: restHeadingRef,
       summary: summaryHeadingRef,
     };
-    const frameId = window.requestAnimationFrame(() => headings[activeView].current?.focus());
+    const focusTarget = `${activeView}:${selectedExercise?.id ?? ''}:${selectedSetIndex ?? ''}`;
+    const viewChanged = previousFocusTargetRef.current !== ''
+      && previousFocusTargetRef.current !== focusTarget;
+    previousFocusTargetRef.current = focusTarget;
+    const frameId = window.requestAnimationFrame(() => {
+      const activeElement = document.activeElement;
+      const userAlreadyFocusedControl = activeElement
+        && activeElement !== document.body
+        && activeElement !== headings[activeView].current;
+      if (viewChanged || !userAlreadyFocusedControl) headings[activeView].current?.focus();
+    });
     return () => window.cancelAnimationFrame(frameId);
   }, [activeView, selectedExercise?.id, selectedSetIndex]);
 

@@ -1,0 +1,58 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isVerifiedOwner(uid) {
+      return request.auth != null
+        && request.auth.uid == uid
+        && request.auth.token.email_verified == true;
+    }
+
+    match /users/{uid} {
+      allow read, delete: if isVerifiedOwner(uid);
+      allow create, update: if isVerifiedOwner(uid)
+        && request.resource.data.uid == uid
+        && request.resource.data.keys().hasOnly([
+          'uid', 'email', 'displayName', 'photoURL', 'avatarId',
+          'avatarSource', 'googlePhotoURL', 'schemaVersion', '_sync'
+        ]);
+
+      match /workouts/{workoutId} {
+        allow read, delete: if isVerifiedOwner(uid);
+        allow create, update: if isVerifiedOwner(uid)
+          && request.resource.data.id == workoutId;
+      }
+
+      match /series/{seriesId} {
+        allow read, delete: if isVerifiedOwner(uid);
+        allow create, update: if isVerifiedOwner(uid)
+          && request.resource.data.id == seriesId;
+      }
+
+      match /templates/{templateId} {
+        allow read, delete: if isVerifiedOwner(uid);
+        allow create, update: if isVerifiedOwner(uid)
+          && request.resource.data.id == templateId;
+      }
+
+      match /bodyWeights/{entryDate} {
+        allow read, delete: if isVerifiedOwner(uid);
+        allow create, update: if isVerifiedOwner(uid)
+          && request.resource.data.date == entryDate;
+      }
+
+      match /meta/app {
+        allow read, delete: if isVerifiedOwner(uid);
+        allow create, update: if isVerifiedOwner(uid)
+          && request.resource.data.schemaVersion == 2
+          && request.resource.data.keys().hasOnly([
+            'schemaVersion', 'settings', 'activeTimer', '_sync'
+          ]);
+      }
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

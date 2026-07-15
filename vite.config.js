@@ -3,7 +3,7 @@ import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
 
 const pwaHead = {
-  name: 'azim-fit-pwa-head',
+  name: 'keep-at-it-pwa-head',
   transformIndexHtml() {
     return [
       {
@@ -42,13 +42,13 @@ export default defineConfig({
       includeManifestIcons: false,
       injectManifest: {
         rollupFormat: 'iife',
-        globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
+        globPatterns: ['**/*.{js,css,html,ico,png,jpg,jpeg,svg,woff2}'],
         maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
       },
       manifest: {
         id: '/',
-        name: 'AZIM.FIT — локальный фитнес-трекер',
-        short_name: 'AZIM.FIT',
+        name: 'KEEP AT IT — локальный фитнес-трекер',
+        short_name: 'KEEP AT IT',
         description: 'Личный local-first трекер тренировок, прогресса и отдыха.',
         lang: 'ru',
         start_url: '/today',

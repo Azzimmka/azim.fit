@@ -28,7 +28,7 @@ export function PwaUpdatePrompt({ className = 'pwa-update-prompt' }) {
 
   return (
     <aside className={className} role="status" aria-live="polite">
-      <p>AZIM.FIT готов работать без сети.</p>
+      <p>KEEP AT IT готов работать без сети.</p>
       <button type="button" onClick={dismissOfflineReady}>Понятно</button>
     </aside>
   );

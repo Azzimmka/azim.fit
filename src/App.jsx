@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
-import { ArrowLeft, CalendarDays } from 'lucide-react';
+import { ArrowLeft, CalendarDays, Zap } from 'lucide-react';
 import {
   Link,
   Navigate,
@@ -33,8 +33,10 @@ import {
   selectWorkoutsForDate,
 } from './domain/index.js';
 import { AppLayout, PageHeader } from './features/layout/AppLayout.jsx';
+import { AuthPage, useAuth } from './features/auth/index.js';
 import { PlanPage } from './features/plan/PlanPage.jsx';
 import { ProgressPage } from './features/progress/ProgressPage.jsx';
+import { consumePendingRegistrationAvatar, resolveProfileAvatar } from './features/profile/avatars.js';
 import { SettingsPage } from './features/settings/SettingsPage.jsx';
 import { ActiveWorkoutPage } from './features/session/index.js';
 import { TodayPage } from './features/today/TodayPage.jsx';
@@ -43,16 +45,21 @@ import { useTimerCompletionSound } from './features/timer/useTimerCompletionSoun
 import { WorkoutCard } from './features/workouts/WorkoutCard.jsx';
 import { WorkoutEditor } from './features/workouts/WorkoutEditor.jsx';
 import { PwaInstallPrompt, PwaUpdatePrompt, requestPersistentStorage } from './pwa/index.js';
+import { firebaseConfigured } from './firebase/client.js';
+import { isAppStateEmpty } from './firebase/firestoreRepository.js';
+import { useCloudSync } from './firebase/useCloudSync.js';
 import {
   ActionTypes,
-  STORAGE_KEY_V2,
   appReducer,
   createDeletionSnapshot,
-  loadAppStateResult,
-  saveAppState,
+  getScopedStorageKey,
+  loadScopedAppStateResult,
+  saveScopedAppState,
 } from './store/index.js';
 
 const VALID_PLAN_TABS = new Set(['calendar', 'missed', 'templates']);
+const GUEST_CLAIM_KEY = 'azim-fit-state-v2:guest-claimed-by';
+const AUTH_PATHS = new Set(['/login', '/register', '/forgot-password']);
 
 function useCurrentCalendarDate() {
   const [today, setToday] = useState(() => getToday());
@@ -297,28 +304,105 @@ function WorkoutSessionRoute({
   );
 }
 
-export default function App() {
+function loadInitialStateForScope(user, today) {
+  const storage = globalThis.localStorage;
+  const scope = user?.uid ?? null;
+  const scopedResult = loadScopedAppStateResult(scope, storage, { today });
+
+  if (!user || scopedResult.source !== 'empty') return scopedResult;
+
+  let claimedBy;
+  try {
+    claimedBy = storage?.getItem(GUEST_CLAIM_KEY) ?? null;
+  } catch {
+    claimedBy = null;
+  }
+  if (claimedBy && claimedBy !== user.uid) return scopedResult;
+
+  const guestResult = loadScopedAppStateResult(null, storage, { today });
+  if (isAppStateEmpty(guestResult.state)) return scopedResult;
+
+  let claimPersisted = claimedBy === user.uid;
+  if (!claimPersisted) {
+    try {
+      storage?.setItem(GUEST_CLAIM_KEY, user.uid);
+      claimPersisted = storage?.getItem(GUEST_CLAIM_KEY) === user.uid;
+    } catch {
+      claimPersisted = false;
+    }
+  }
+  if (!claimPersisted) return { ...scopedResult, claimFailed: true };
+
+  const persisted = saveScopedAppState(user.uid, guestResult.state, storage, { today });
+  if (!persisted) return { ...scopedResult, claimFailed: true };
+
+  return {
+    ...guestResult,
+    source: 'guest-copy',
+    migrated: true,
+    claimedGuest: true,
+    persisted,
+  };
+}
+
+function AppContent({ authState }) {
   const today = useCurrentCalendarDate();
   const location = useLocation();
   const navigate = useNavigate();
+  const { user } = authState;
+  const storageScope = user?.uid ?? null;
   const sessionRouteActive = /^\/workouts\/[^/]+\/session\/?$/.test(location.pathname);
-  const [loadResult] = useState(() => loadAppStateResult(globalThis.localStorage, { today }));
+  const authRouteActive = AUTH_PATHS.has(location.pathname);
+  const immersiveRouteActive = sessionRouteActive || authRouteActive;
+  const [loadResult] = useState(() => loadInitialStateForScope(user, today));
   const [state, dispatch] = useReducer(appReducer, loadResult.state);
+  const [registrationAvatarId] = useState(() => consumePendingRegistrationAvatar(user?.uid));
   const [editor, setEditor] = useState(null);
   const [scopeRequest, setScopeRequest] = useState(null);
   const [undo, setUndo] = useState(null);
   const [notice, setNotice] = useState(() => {
+    if (loadResult.claimFailed) return { variant: 'info', title: 'Локальные данные пока не подключены', message: 'Браузер не разрешил безопасно закрепить их за аккаунтом.' };
+    if (loadResult.claimedGuest) return { variant: 'success', title: 'Локальные данные подключены', message: 'Гостевые тренировки добавлены в ваш аккаунт.' };
     if (loadResult.migrated) return { variant: 'success', title: 'Данные обновлены', message: 'Тренировки V1 перенесены в новый формат.' };
     if (loadResult.recovered) return { variant: 'info', title: 'Хранилище восстановлено', message: 'Повреждённые данные были безопасно сброшены.' };
     return null;
   });
   const [storageStatus, setStorageStatus] = useState('unknown');
+  const [verificationPending, setVerificationPending] = useState(false);
   const [, setTimerClock] = useState(() => Date.now());
   const stateRef = useRef(state);
+  const verificationPendingRef = useRef(false);
+
+  const handleSyncEvent = useCallback((event) => {
+    if (event.type === 'uploaded-local') {
+      setNotice({ variant: 'success', title: 'Данные сохранены в облаке', message: 'Локальные тренировки синхронизированы.' });
+    } else if (event.type === 'downloaded-cloud') {
+      setNotice({ variant: 'success', title: 'Облачные данные загружены', message: 'Можно продолжить с последнего сохранённого места.' });
+    } else if (event.type === 'merged') {
+      setNotice({ variant: 'success', title: 'Данные объединены', message: 'Локальная и облачная история сохранены.' });
+    }
+  }, []);
+
+  const { syncStatus, syncError } = useCloudSync({
+    user,
+    state,
+    dispatch,
+    today,
+    enabled: firebaseConfigured,
+    onEvent: handleSyncEvent,
+  });
 
   useEffect(() => {
     stateRef.current = state;
   }, [state]);
+
+  useEffect(() => {
+    if (!registrationAvatarId) return;
+    dispatch({
+      type: ActionTypes.SETTINGS_UPDATE,
+      payload: { avatarSource: 'generated', avatarId: registrationAvatarId },
+    });
+  }, [registrationAvatarId]);
 
   const stats = useMemo(() => selectProgressStats(state, today), [state, today]);
   const todayWorkouts = useMemo(() => selectWorkoutsForDate(state, today), [state, today]);
@@ -333,9 +417,13 @@ export default function App() {
   })), [state, today]);
   const todayPoints = selectDailyPoints(state, today, 1)[0]?.points ?? 0;
   const remainingPoints = 250 - (stats.totalPoints % 250);
+  const accountAvatar = useMemo(
+    () => resolveProfileAvatar(user, state.settings),
+    [state.settings, user],
+  );
 
   useEffect(() => {
-    const saved = saveAppState(state, globalThis.localStorage, { today });
+    const saved = saveScopedAppState(storageScope, state, globalThis.localStorage, { today });
     let cancelled = false;
     const persistenceRequest = saved
       ? requestPersistentStorage()
@@ -344,19 +432,19 @@ export default function App() {
       if (!cancelled) setStorageStatus(result.persisted ? 'persisted' : result.supported ? 'denied' : 'unsupported');
     });
     return () => { cancelled = true; };
-  }, [state, today]);
+  }, [state, storageScope, today]);
 
   useEffect(() => {
     const handleStorage = (event) => {
-      if (event.key !== STORAGE_KEY_V2 || event.storageArea !== globalThis.localStorage) return;
-      const nextState = loadAppStateResult(globalThis.localStorage, { today }).state;
+      if (event.key !== getScopedStorageKey(storageScope) || event.storageArea !== globalThis.localStorage) return;
+      const nextState = loadScopedAppStateResult(storageScope, globalThis.localStorage, { today }).state;
       if (JSON.stringify(nextState) === JSON.stringify(stateRef.current)) return;
       dispatch({ type: ActionTypes.REPLACE_STATE, payload: { state: nextState } });
     };
 
     window.addEventListener('storage', handleStorage);
     return () => window.removeEventListener('storage', handleStorage);
-  }, [today]);
+  }, [storageScope, today]);
 
   useEffect(() => {
     if (!undo) return undefined;
@@ -672,18 +760,79 @@ export default function App() {
     onSkipRest: () => dispatch({ type: ActionTypes.TIMER_FINISH }),
   };
 
+  const handleLogout = async () => {
+    try {
+      await authState.logout();
+      navigate('/today', { replace: true });
+    } catch (error) {
+      setNotice({ variant: 'error', title: 'Не удалось выйти', message: error?.message });
+    }
+  };
+
+  const runVerificationAction = async (action, createSuccessNotice, failureTitle) => {
+    if (verificationPendingRef.current) return;
+    verificationPendingRef.current = true;
+    setVerificationPending(true);
+    try {
+      const result = await action();
+      setNotice(createSuccessNotice(result));
+    } catch (error) {
+      setNotice({ variant: 'error', title: failureTitle, message: error?.message });
+    } finally {
+      verificationPendingRef.current = false;
+      setVerificationPending(false);
+    }
+  };
+
+  const handleResendVerification = () => runVerificationAction(
+    () => authState.resendVerification(),
+    (sent) => (sent
+      ? { variant: 'success', title: 'Письмо отправлено', message: 'Проверьте входящие и папку «Спам».' }
+      : { variant: 'info', title: 'Email уже подтверждён' }),
+    'Не удалось отправить письмо',
+  );
+
+  const handleCheckVerification = () => runVerificationAction(
+    () => authState.refreshVerification(),
+    (verified) => (verified
+      ? { variant: 'success', title: 'Email подтверждён', message: 'Облачная синхронизация включена.' }
+      : { variant: 'info', title: 'Подтверждение ещё не найдено', message: 'Откройте ссылку из письма и повторите проверку.' }),
+    'Не удалось проверить email',
+  );
+
   return (
     <AppLayout
-      immersive={sessionRouteActive}
+      immersive={immersiveRouteActive}
       points={stats.totalPoints}
       level={stats.level}
       levelProgress={stats.levelProgress}
       remainingPoints={remainingPoints}
       missedCount={stats.missedWorkouts}
+      accountUser={user}
+      accountAvatar={accountAvatar}
+      syncStatus={syncStatus}
     >
-      {!sessionRouteActive && <FocusPageHeading />}
+      {!immersiveRouteActive && <FocusPageHeading />}
       <Routes>
         <Route path="/" element={<Navigate to="/today" replace />} />
+        <Route
+          path="/login"
+          element={user
+            ? <Navigate to="/today" replace />
+            : <AuthPage mode="login" onContinueLocal={() => navigate('/today', { replace: true })} />}
+        />
+        <Route
+          path="/register"
+          element={user
+            ? <Navigate to="/today" replace />
+            : <AuthPage mode="register" onContinueLocal={() => navigate('/today', { replace: true })} />}
+        />
+        <Route
+          path="/forgot-password"
+          element={user
+            ? <Navigate to="/today" replace />
+            : <AuthPage mode="reset" onContinueLocal={() => navigate('/today', { replace: true })} />}
+        />
         <Route
           path="/today"
           element={(
@@ -745,11 +894,31 @@ export default function App() {
                 setNotice({ variant: 'success', title: 'Демо загружено', message: 'Можно изучить все основные сценарии.' });
               }}
               onReset={() => {
-                if (!window.confirm('Очистить все локальные данные AZIM.FIT?')) return;
+                const confirmation = user?.emailVerified
+                  ? 'Очистить данные этого аккаунта на устройстве и в облаке?'
+                  : 'Очистить все локальные данные этого профиля KEEP AT IT?';
+                if (!window.confirm(confirmation)) return;
                 dispatch({ type: ActionTypes.REPLACE_STATE, payload: { state: createEmptyAppState() } });
-                setNotice({ variant: 'info', title: 'Локальные данные очищены' });
+                setNotice(user?.emailVerified
+                  ? { variant: 'info', title: 'Локальные данные очищены', message: 'Облачное удаление синхронизируется…' }
+                  : { variant: 'info', title: 'Локальные данные очищены' });
               }}
               storageStatus={storageStatus}
+              authUser={user}
+              authAvailable={authState.authAvailable}
+              syncStatus={syncStatus}
+              syncError={syncError}
+              avatarSettings={state.settings}
+              accountAvatar={accountAvatar}
+              verificationPending={verificationPending}
+              onLogin={() => navigate('/login')}
+              onLogout={() => { void handleLogout(); }}
+              onResendVerification={() => { void handleResendVerification(); }}
+              onCheckVerification={() => { void handleCheckVerification(); }}
+              onAvatarChange={(nextAvatar) => {
+                dispatch({ type: ActionTypes.SETTINGS_UPDATE, payload: nextAvatar });
+                setNotice({ variant: 'success', title: 'Аватар обновлён' });
+              }}
             />
           )}
         />
@@ -768,7 +937,7 @@ export default function App() {
         <Route path="*" element={<Navigate to="/today" replace />} />
       </Routes>
 
-      {state.activeTimer && !sessionRouteActive && (
+      {state.activeTimer && !immersiveRouteActive && (
         <RestTimer
           remainingSeconds={timerSnapshot.remainingSeconds}
           status={timerSnapshot.status}
@@ -814,8 +983,23 @@ export default function App() {
         />
       )}
       {!undo && notice && <Toast {...notice} onDismiss={() => setNotice(null)} />}
-      {!sessionRouteActive && <PwaInstallPrompt />}
-      {!sessionRouteActive && <PwaUpdatePrompt />}
+      {!immersiveRouteActive && <PwaInstallPrompt />}
+      {!immersiveRouteActive && <PwaUpdatePrompt />}
     </AppLayout>
   );
+}
+
+export default function App() {
+  const authState = useAuth();
+
+  if (!authState.authReady) {
+    return (
+      <div className="auth-loading" role="status" aria-live="polite">
+        <span className="auth-loading-mark" aria-hidden="true"><Zap size={28} fill="currentColor" /></span>
+        <strong>Открываем KEEP AT IT…</strong>
+      </div>
+    );
+  }
+
+  return <AppContent key={authState.user?.uid ?? 'guest'} authState={authState} />;
 }

@@ -1,4 +1,4 @@
-import { BarChart3, CalendarDays, Flame, LayoutDashboard, Settings, Star, Trophy, Zap } from 'lucide-react';
+import { BarChart3, CalendarDays, Flame, LayoutDashboard, MailCheck, Settings, Star, Trophy, UserRound, Zap } from 'lucide-react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { formatRuCount } from '../../domain/plural.js';
 
@@ -12,17 +12,72 @@ const MOBILE_NAV_ITEMS = [
   { to: '/settings', label: 'Настройки', short: 'Настройки', icon: Settings },
 ];
 
-export function AppLayout({ children, points, level, levelProgress, remainingPoints, missedCount, immersive = false }) {
+const SYNC_STATUS_META = Object.freeze({
+  local: { tone: 'local', label: 'Локальный режим' },
+  connecting: { tone: 'syncing', label: 'Подключение к облаку' },
+  syncing: { tone: 'syncing', label: 'Синхронизация' },
+  synced: { tone: 'synced', label: 'Данные синхронизированы' },
+  offline: { tone: 'local', label: 'Offline' },
+  'verify-email': { tone: 'local', label: 'Ожидается подтверждение email' },
+  error: { tone: 'error', label: 'Ошибка синхронизации' },
+});
+
+function getAccountCopy(accountUser, syncStatus, accountAvatar = null) {
+  const displayName = typeof accountUser?.displayName === 'string'
+    ? accountUser.displayName.trim()
+    : '';
+  const email = typeof accountUser?.email === 'string' ? accountUser.email.trim() : '';
+  const sync = SYNC_STATUS_META[syncStatus] ?? SYNC_STATUS_META.local;
+  if (!accountUser) {
+    return {
+      name: 'Локальный профиль',
+      detail: 'Локальный режим',
+      initial: 'Л',
+      photoURL: '',
+      sync: SYNC_STATUS_META.local,
+    };
+  }
+  const name = displayName || email || 'Аккаунт KEEP AT IT';
+  return {
+    name,
+    detail: displayName && email ? email : sync.label,
+    initial: name.slice(0, 1).toLocaleUpperCase('ru-RU'),
+    photoURL: typeof accountAvatar?.src === 'string'
+      ? accountAvatar.src
+      : (typeof accountUser.photoURL === 'string' ? accountUser.photoURL : ''),
+    sync,
+  };
+}
+
+export function AppLayout({
+  children,
+  points,
+  level,
+  levelProgress,
+  remainingPoints,
+  missedCount,
+  immersive = false,
+  accountUser = null,
+  syncStatus = 'local',
+  accountAvatar = null,
+}) {
   const { pathname } = useLocation();
   const sessionPath = /^\/workouts\/[^/]+\/session\/?$/.test(pathname);
   const immersiveMode = immersive || sessionPath;
+  const account = getAccountCopy(accountUser, syncStatus, accountAvatar);
+  const requiresEmailVerification = accountUser?.emailVerified === false;
+  const profileLabel = `Настройки аккаунта: ${[
+    account.name,
+    account.detail,
+    account.sync.label,
+  ].filter((item, index, items) => items.indexOf(item) === index).join(', ')}`;
 
   return (
     <div className={`app-shell ${immersiveMode ? 'immersive-session-shell' : ''}`}>
       {!immersiveMode && <aside className="sidebar">
-        <NavLink className="brand" to="/today" aria-label="AZIM.FIT — на главную">
+        <NavLink className="brand" to="/today" aria-label="KEEP AT IT — на главную">
           <span className="brand-mark"><Zap size={18} fill="currentColor" /></span>
-          <span>AZIM<span>.FIT</span></span>
+          <span>KEEP <span>AT IT</span></span>
         </NavLink>
         <nav className="side-nav" aria-label="Основная навигация">
           <p className="nav-caption">Меню</p>
@@ -39,15 +94,45 @@ export function AppLayout({ children, points, level, levelProgress, remainingPoi
           <div className="dark-progress" role="progressbar" aria-label={`Прогресс уровня ${level}`} aria-valuemin="0" aria-valuemax="250" aria-valuenow={points % 250}><span style={{ width: `${levelProgress}%` }} /></div>
           <p>До нового уровня осталось {formatRuCount(remainingPoints, 'point')}</p>
         </div>
-        <NavLink className="profile-row" to="/settings"><div className="avatar">А</div><div><strong>Азим</strong><small>Настройки</small></div><Settings size={18} /></NavLink>
+        <NavLink className="profile-row" to="/settings" aria-label={profileLabel}>
+          <div className="avatar account-avatar">
+            {account.photoURL ? <img src={account.photoURL} alt="" /> : account.initial}
+          </div>
+          <div className="profile-copy">
+            <strong>{account.name}</strong>
+            <small><i className={`profile-sync-indicator ${account.sync.tone}`} title={account.sync.label} aria-hidden="true" /> {account.detail}</small>
+          </div>
+          <Settings size={18} aria-hidden="true" />
+        </NavLink>
       </aside>}
 
       <main className={`main-content ${immersiveMode ? 'immersive-session-content' : ''}`} id="main-content">
         {!immersiveMode && <div className="mobile-topbar">
-          <NavLink className="brand" to="/today"><span className="brand-mark"><Zap size={17} fill="currentColor" /></span><span>AZIM<span>.FIT</span></span></NavLink>
-          <div className="mobile-points" aria-label={formatRuCount(points, 'point')}><Star size={15} fill="currentColor" aria-hidden="true" /> {points}</div>
+          <NavLink className="brand" to="/today" aria-label="KEEP AT IT — на главную"><span className="brand-mark"><Zap size={17} fill="currentColor" /></span><span>KEEP <span>AT IT</span></span></NavLink>
+          <div className="mobile-account-actions">
+            <div className="mobile-points" aria-label={formatRuCount(points, 'point')}><Star size={15} fill="currentColor" aria-hidden="true" /> {points}</div>
+            <NavLink
+              className={`mobile-account-control ${accountUser ? 'signed-in' : 'guest'}`}
+              to={accountUser ? '/settings' : '/login'}
+              aria-label={accountUser ? profileLabel : 'Войти и включить синхронизацию'}
+            >
+              {accountUser && account.photoURL
+                ? <img src={account.photoURL} alt="" />
+                : <UserRound size={20} aria-hidden="true" />}
+              <i className={`profile-sync-indicator ${account.sync.tone}`} aria-hidden="true" />
+            </NavLink>
+          </div>
         </div>}
-        <div className={immersiveMode ? 'session-page-container' : 'page-container'}>{children}</div>
+        <div className={immersiveMode ? 'session-page-container' : 'page-container'}>
+          {!immersiveMode && requiresEmailVerification && (
+            <div className="email-verification-banner" role="status" aria-live="polite">
+              <span className="email-verification-icon" aria-hidden="true"><MailCheck size={18} /></span>
+              <p><strong>Подтвердите email</strong><span>для облачной синхронизации</span></p>
+              <NavLink className="email-verification-link" to="/settings">Открыть</NavLink>
+            </div>
+          )}
+          {children}
+        </div>
       </main>
 
       {!immersiveMode && <nav className="mobile-nav" aria-label="Мобильная навигация">

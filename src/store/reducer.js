@@ -8,6 +8,7 @@ import {
 import {
   normalizeAppState,
   normalizeBodyWeightEntry,
+  normalizeSettings,
   normalizeSeries,
   normalizeTemplate,
   normalizeWorkout,
@@ -62,6 +63,7 @@ export const ActionTypes = Object.freeze({
   TEMPLATE_APPLY: 'template/apply',
   BODY_WEIGHT_UPSERT: 'body-weight/upsert',
   BODY_WEIGHT_DELETE: 'body-weight/delete',
+  SETTINGS_UPDATE: 'settings/update',
   WORKOUT_START_REST: 'workout/start-rest',
   WORKOUT_SESSION_START: 'workout/session-start',
   WORKOUT_START_SESSION: 'workout/session-start',
@@ -128,6 +130,12 @@ export function appReducer(currentState, action) {
   switch (action?.type) {
     case ActionTypes.REPLACE_STATE:
       return normalizeAppState(payload.state ?? payload);
+
+    case ActionTypes.SETTINGS_UPDATE:
+      return {
+        ...state,
+        settings: normalizeSettings({ ...state.settings, ...(payload.settings ?? payload) }),
+      };
 
     case ActionTypes.WORKOUT_ADD: {
       const workout = normalizeWorkout(payload.workout ?? payload, payload.options);

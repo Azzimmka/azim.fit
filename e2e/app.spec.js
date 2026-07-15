@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 
-const STORAGE_KEY = 'azim-fit-state-v2';
+const STORAGE_KEY = 'azim-fit-state-v2:guest';
 
 async function loadDemo(page) {
   await page.goto('/settings');
@@ -30,10 +30,34 @@ async function waitForServiceWorkerControl(page) {
     if (!('serviceWorker' in navigator)) throw new Error('Service Worker API is unavailable');
     await navigator.serviceWorker.ready;
   });
+  const controlled = await page.evaluate(() => Boolean(navigator.serviceWorker.controller));
+  if (!controlled) {
+    await page.reload({ waitUntil: 'domcontentloaded' });
+  }
   await page.waitForFunction(() => Boolean(navigator.serviceWorker.controller), null, {
     timeout: 20_000,
   });
 }
+
+test('маршруты авторизации доступны, а гостевой режим остаётся необязательным', async ({ page }) => {
+  await page.goto('/login');
+  await expect(page.getByRole('heading', { name: 'Войти в KEEP AT IT' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Продолжить с Google' })).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+
+  await page.getByRole('link', { name: 'Создать' }).click();
+  await expect(page).toHaveURL(/\/register$/);
+  await expect(page.getByRole('heading', { name: 'Создать аккаунт' })).toBeVisible();
+
+  await page.goto('/forgot-password');
+  await expect(page.getByRole('heading', { name: 'Сбросить пароль' })).toBeVisible();
+
+  await page.goto('/login');
+  await page.getByRole('button', { name: 'Продолжить без аккаунта' }).click();
+  await expect(page).toHaveURL(/\/today$/);
+  await page.goto('/settings');
+  await expect(page.getByRole('button', { name: /Войти и включить синхронизацию|Firebase не настроен/ })).toBeVisible();
+});
 
 test('первый запуск пустой; тренировку можно создать, открыть по URL, удалить и восстановить', async ({ page }) => {
   const title = 'Приёмочная силовая';
@@ -383,6 +407,7 @@ test('пропущенную тренировку можно выполнить 
   await page.goto('/plan?tab=missed');
 
   const card = workoutCard(page, 'Кардио и мобильность');
+  await expect(card).toBeVisible();
   const setButtons = card.locator('button.set-dot');
   const totalSets = await setButtons.count();
   expect(totalSets).toBeGreaterThan(0);

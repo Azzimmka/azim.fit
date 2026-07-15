@@ -90,8 +90,84 @@ describe('feature pages', () => {
     );
 
     expect(screen.getByRole('heading', { name: 'Приложение' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Локальные данные' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Данные' })).toBeInTheDocument();
     expect(screen.queryByText('Напоминания')).not.toBeInTheDocument();
+  });
+
+  it('shows verification and logout actions for an email account', async () => {
+    const user = userEvent.setup();
+    const onCheckVerification = vi.fn();
+    const onResendVerification = vi.fn();
+    const onLogout = vi.fn();
+
+    render(
+      <SettingsPage
+        points={0}
+        onLoadDemo={() => {}}
+        onReset={() => {}}
+        storageStatus="persisted"
+        authUser={{ email: 'azim@example.com', emailVerified: false }}
+        syncStatus="verify-email"
+        onCheckVerification={onCheckVerification}
+        onResendVerification={onResendVerification}
+        onLogout={onLogout}
+      />,
+    );
+
+    expect(screen.getByText('Подтвердите email для облачной синхронизации')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Проверить подтверждение' }));
+    await user.click(screen.getByRole('button', { name: 'Отправить письмо ещё раз' }));
+    await user.click(screen.getByRole('button', { name: 'Выйти из аккаунта' }));
+    expect(onCheckVerification).toHaveBeenCalledOnce();
+    expect(onResendVerification).toHaveBeenCalledOnce();
+    expect(onLogout).toHaveBeenCalledOnce();
+  });
+
+  it('changes the account avatar from settings without a blocking dialog', async () => {
+    const user = userEvent.setup();
+    const onAvatarChange = vi.fn();
+
+    render(
+      <SettingsPage
+        points={0}
+        onLoadDemo={() => {}}
+        onReset={() => {}}
+        storageStatus="persisted"
+        authUser={{ email: 'user@example.com', emailVerified: true }}
+        accountAvatar={{ kind: 'generated', src: '/avatars/avatar-01.jpg', avatarId: 'avatar-01' }}
+        avatarSettings={{ avatarSource: 'generated', avatarId: 'avatar-01' }}
+        syncStatus="synced"
+        onAvatarChange={onAvatarChange}
+        onLogout={() => {}}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Изменить аватар' }));
+    await user.click(screen.getByRole('button', { name: 'Аватар 4' }));
+    expect(onAvatarChange).toHaveBeenCalledWith({ source: 'generated', avatarId: 'avatar-04' });
+    expect(screen.getByText('Новый аватар выбран.')).toBeInTheDocument();
+  });
+
+  it('locks both verification actions while either request is pending', () => {
+    render(
+      <SettingsPage
+        points={0}
+        onLoadDemo={() => {}}
+        onReset={() => {}}
+        storageStatus="persisted"
+        authUser={{ email: 'azim@example.com', emailVerified: false }}
+        syncStatus="verify-email"
+        verificationPending
+        onCheckVerification={() => {}}
+        onResendVerification={() => {}}
+        onLogout={() => {}}
+      />,
+    );
+
+    const actions = screen.getByRole('button', { name: 'Проверить подтверждение' }).parentElement;
+    expect(actions).toHaveAttribute('aria-busy', 'true');
+    expect(screen.getByRole('button', { name: 'Проверить подтверждение' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Отправить письмо ещё раз' })).toBeDisabled();
   });
 
   it('shows a compact summary for the selected progress day', async () => {
