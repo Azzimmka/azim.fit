@@ -1,9 +1,12 @@
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WorkoutCard } from './WorkoutCard.jsx';
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 
 const workout = {
   id: 'workout-1',
@@ -103,6 +106,69 @@ describe('WorkoutCard', () => {
 
     expect(onDelete).toHaveBeenCalledWith(workout);
     expect(onStartSession).not.toHaveBeenCalled();
+  });
+
+  it('opens the action menu upward near mobile navigation and recalculates on resize', async () => {
+    const user = userEvent.setup();
+    render(
+      <>
+        <WorkoutCard
+          workout={workout}
+          today="2026-07-13"
+          onStartSession={() => {}}
+          onDelete={() => {}}
+        />
+        <nav className="mobile-nav" aria-label="Нижняя навигация" />
+      </>,
+    );
+
+    const summary = screen.getByRole('button', { name: 'Действия: Ноги' });
+    const details = summary.closest('details');
+    const popover = details.querySelector('.action-menu-popover');
+    const mobileNav = screen.getByRole('navigation', { name: 'Нижняя навигация' });
+    let triggerTop = 620;
+    vi.spyOn(summary, 'getBoundingClientRect').mockImplementation(() => ({
+      top: triggerTop,
+      bottom: triggerTop + 44,
+      left: 300,
+      right: 344,
+      width: 44,
+      height: 44,
+      x: 300,
+      y: triggerTop,
+      toJSON: () => {},
+    }));
+    vi.spyOn(popover, 'getBoundingClientRect').mockReturnValue({
+      top: 0,
+      bottom: 250,
+      left: 0,
+      right: 220,
+      width: 220,
+      height: 250,
+      x: 0,
+      y: 0,
+      toJSON: () => {},
+    });
+    Object.defineProperty(popover, 'scrollHeight', { configurable: true, value: 250 });
+    vi.spyOn(mobileNav, 'getBoundingClientRect').mockReturnValue({
+      top: 700,
+      bottom: 768,
+      left: 0,
+      right: 390,
+      width: 390,
+      height: 68,
+      x: 0,
+      y: 700,
+      toJSON: () => {},
+    });
+
+    await user.click(summary);
+    await waitFor(() => expect(details).toHaveClass('opens-up'));
+    expect(popover.style.getPropertyValue('--action-menu-max-height')).toBe('605px');
+
+    triggerTop = 100;
+    fireEvent(window, new Event('resize'));
+    await waitFor(() => expect(details).not.toHaveClass('opens-up'));
   });
 
   it('disables a future workout and labels it as scheduled', () => {

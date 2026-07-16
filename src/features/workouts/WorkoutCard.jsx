@@ -1,3 +1,4 @@
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Activity,
   CalendarClock,
@@ -22,6 +23,7 @@ import {
   RU_FORMS,
 } from '../../domain/plural.js';
 import { getWorkoutPoints } from '../../domain/points.js';
+import { calculateActionMenuLayout } from './menuPlacement.js';
 
 const TYPE_ICONS = { Силовая: Dumbbell, Кардио: Activity, Мобильность: Sparkles, Другое: Target };
 const REP_FORMS = Object.freeze(['повтор', 'повтора', 'повторов']);
@@ -74,6 +76,67 @@ export function WorkoutCard({
     || (missed && onSkip)
     || onDelete,
   );
+  const actionMenuRef = useRef(null);
+  const [actionMenuLayout, setActionMenuLayout] = useState({
+    placement: 'down',
+    maxHeight: null,
+  });
+
+  const updateActionMenuLayout = useCallback(() => {
+    const details = actionMenuRef.current;
+    if (!details?.open) return;
+    const trigger = details.querySelector('summary');
+    const popover = details.querySelector('.action-menu-popover');
+    if (!trigger || !popover) return;
+
+    const visualViewport = window.visualViewport;
+    const viewportOffsetTop = visualViewport?.offsetTop ?? 0;
+    const viewportHeight = visualViewport?.height ?? window.innerHeight;
+    const viewportTop = viewportOffsetTop + 8;
+    let viewportBottom = viewportOffsetTop + viewportHeight - 8;
+    const mobileNav = document.querySelector('.mobile-nav');
+    if (mobileNav && window.getComputedStyle(mobileNav).display !== 'none') {
+      const mobileNavBounds = mobileNav.getBoundingClientRect();
+      if (mobileNavBounds.height > 0) viewportBottom = Math.min(viewportBottom, mobileNavBounds.top - 8);
+    }
+
+    const triggerBounds = trigger.getBoundingClientRect();
+    const popoverBounds = popover.getBoundingClientRect();
+    const nextLayout = calculateActionMenuLayout({
+      triggerTop: triggerBounds.top,
+      triggerBottom: triggerBounds.bottom,
+      menuHeight: Math.max(popover.scrollHeight, popoverBounds.height),
+      viewportTop,
+      viewportBottom,
+    });
+    setActionMenuLayout((current) => (
+      current.placement === nextLayout.placement && current.maxHeight === nextLayout.maxHeight
+        ? current
+        : nextLayout
+    ));
+  }, []);
+
+  const handleActionMenuToggle = (event) => {
+    if (!event.currentTarget.open) {
+      setActionMenuLayout({ placement: 'down', maxHeight: null });
+      return;
+    }
+    window.requestAnimationFrame(updateActionMenuLayout);
+  };
+
+  useEffect(() => {
+    const visualViewport = window.visualViewport;
+    window.addEventListener('resize', updateActionMenuLayout);
+    window.addEventListener('scroll', updateActionMenuLayout, true);
+    visualViewport?.addEventListener('resize', updateActionMenuLayout);
+    visualViewport?.addEventListener('scroll', updateActionMenuLayout);
+    return () => {
+      window.removeEventListener('resize', updateActionMenuLayout);
+      window.removeEventListener('scroll', updateActionMenuLayout, true);
+      visualViewport?.removeEventListener('resize', updateActionMenuLayout);
+      visualViewport?.removeEventListener('scroll', updateActionMenuLayout);
+    };
+  }, [updateActionMenuLayout]);
 
   const ctaLabel = canStart
     ? 'Начать'
@@ -137,9 +200,18 @@ export function WorkoutCard({
         </div>
         <div className="points-tag" aria-label={`Можно получить ${formatRuCount(points, 'point')}`}><Star size={14} fill="currentColor" aria-hidden="true" /> +{points}</div>
         {hasMenuActions && (
-          <details className="action-menu">
+          <details
+            ref={actionMenuRef}
+            className={`action-menu ${actionMenuLayout.placement === 'up' ? 'opens-up' : ''}`}
+            onToggle={handleActionMenuToggle}
+          >
             <summary role="button" className="icon-button" aria-label={`Действия: ${workout.title}`}><MoreHorizontal size={18} aria-hidden="true" /></summary>
-            <div className="action-menu-popover">
+            <div
+              className="action-menu-popover"
+              style={actionMenuLayout.maxHeight
+                ? { '--action-menu-max-height': `${actionMenuLayout.maxHeight}px` }
+                : undefined}
+            >
               {planned && onEdit && <button type="button" onClick={() => onEdit(workout)}><Edit3 size={16} aria-hidden="true" /> Редактировать</button>}
               {planned && onReschedule && <button type="button" onClick={() => onReschedule(workout)}><MoveRight size={16} aria-hidden="true" /> Перенести</button>}
               {completed && onCorrectResult && <button type="button" onClick={() => onCorrectResult(workout)}><Edit3 size={16} aria-hidden="true" /> Исправить результат</button>}
