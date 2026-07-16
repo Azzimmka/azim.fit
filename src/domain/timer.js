@@ -1,5 +1,7 @@
 import { MAX_REST_SECONDS, MIN_REST_SECONDS } from './model.js';
 
+export const MAX_WORK_SECONDS = 86_400;
+
 function toTimestamp(now) {
   const value = now instanceof Date ? now.getTime() : new Date(now ?? Date.now()).getTime();
   return Number.isFinite(value) ? value : Date.now();
@@ -28,18 +30,59 @@ export function startRestTimer(seconds, options = {}) {
     initialSeconds: duration,
     workoutId: options.workoutId ? String(options.workoutId) : null,
     exerciseId: options.exerciseId ? String(options.exerciseId) : null,
+    phase: 'rest',
+    setIndex: null,
+  };
+}
+
+/**
+ * Starts the single global timer in work mode for one timed set.
+ * @param {number} seconds
+ * @param {{now?: Date|number|string, workoutId?: string|null, exerciseId?: string|null, setIndex?: number|null}} options
+ */
+export function startWorkTimer(seconds, options = {}) {
+  const numericSeconds = Number(seconds);
+  if (!Number.isInteger(numericSeconds) || numericSeconds < 1 || numericSeconds > MAX_WORK_SECONDS) {
+    return null;
+  }
+  const numericSetIndex = Number(options.setIndex);
+  const nowTimestamp = toTimestamp(options.now);
+  return {
+    status: 'running',
+    endsAt: new Date(nowTimestamp + numericSeconds * 1_000).toISOString(),
+    remainingSeconds: null,
+    initialSeconds: numericSeconds,
+    workoutId: options.workoutId ? String(options.workoutId) : null,
+    exerciseId: options.exerciseId ? String(options.exerciseId) : null,
+    phase: 'work',
+    setIndex: Number.isInteger(numericSetIndex) && numericSetIndex >= 0
+      ? numericSetIndex
+      : null,
   };
 }
 
 /** @param {unknown} input */
 export function normalizeActiveTimer(input) {
   if (!input || typeof input !== 'object') return null;
-  const initialSeconds = normalizeRestSeconds(input.initialSeconds ?? input.durationSeconds, 0);
+  const phase = input.phase === 'work' ? 'work' : 'rest';
+  const rawInitialSeconds = Number(input.initialSeconds ?? input.durationSeconds);
+  const initialSeconds = phase === 'work'
+    ? (Number.isInteger(rawInitialSeconds) && rawInitialSeconds >= 1 && rawInitialSeconds <= MAX_WORK_SECONDS
+      ? rawInitialSeconds
+      : 0)
+    : normalizeRestSeconds(rawInitialSeconds, 0);
   if (initialSeconds === 0) return null;
+  const maximum = phase === 'work' ? MAX_WORK_SECONDS : MAX_REST_SECONDS;
+  const numericSetIndex = Number(input.setIndex);
+  const setIndex = phase === 'work'
+    && Number.isInteger(numericSetIndex)
+    && numericSetIndex >= 0
+    ? numericSetIndex
+    : null;
 
   if (input.status === 'paused') {
     const remaining = Math.min(
-      MAX_REST_SECONDS,
+      maximum,
       Math.max(0, Math.ceil(Number(input.remainingSeconds) || 0)),
     );
     return {
@@ -49,6 +92,8 @@ export function normalizeActiveTimer(input) {
       initialSeconds,
       workoutId: input.workoutId ? String(input.workoutId) : null,
       exerciseId: input.exerciseId ? String(input.exerciseId) : null,
+      phase,
+      setIndex,
     };
   }
 
@@ -61,6 +106,8 @@ export function normalizeActiveTimer(input) {
     initialSeconds,
     workoutId: input.workoutId ? String(input.workoutId) : null,
     exerciseId: input.exerciseId ? String(input.exerciseId) : null,
+    phase,
+    setIndex,
   };
 }
 
@@ -80,6 +127,16 @@ export function normalizeActiveTimerForWorkouts(input, workouts) {
   if (!workout) return null;
   if (timer.exerciseId && !workout.exercises.some((exercise) => exercise.id === timer.exerciseId)) {
     return null;
+  }
+  if (timer.phase === 'work') {
+    const exercise = workout.exercises.find((item) => item.id === timer.exerciseId);
+    const result = exercise?.setResults?.[timer.setIndex];
+    if (
+      exercise?.structure !== 'sets'
+      || exercise?.target?.kind !== 'duration'
+      || !result
+      || result.status !== 'pending'
+    ) return null;
   }
   return timer;
 }
@@ -105,7 +162,23 @@ export function getTimerSnapshot(timer, now = Date.now()) {
     endsAt: normalized.endsAt,
     workoutId: normalized.workoutId,
     exerciseId: normalized.exerciseId,
+    phase: normalized.phase,
+    setIndex: normalized.setIndex,
+    initialSeconds: normalized.initialSeconds,
   };
+}
+
+/** @param {import('./model.js').ActiveTimer|null} timer @param {Date|number|string} now */
+export function getTimerElapsedSeconds(timer, now = Date.now()) {
+  const normalized = normalizeActiveTimer(timer);
+  if (!normalized) return 0;
+  const remaining = normalized.status === 'paused'
+    ? normalized.remainingSeconds
+    : getTimerRemainingSeconds(normalized, now);
+  return Math.min(
+    normalized.initialSeconds,
+    Math.max(0, normalized.initialSeconds - remaining),
+  );
 }
 
 /** @param {import('./model.js').ActiveTimer|null} timer @param {Date|number|string} now */
@@ -142,6 +215,7 @@ export function resumeRestTimer(timer, now = Date.now()) {
 export function addRestTimerSeconds(timer, seconds = 30, now = Date.now()) {
   const normalized = normalizeActiveTimer(timer);
   if (!normalized) return null;
+  if (normalized.phase === 'work') return normalized;
   const addition = Math.max(0, Math.round(Number(seconds) || 0));
 
   if (normalized.status === 'paused') {

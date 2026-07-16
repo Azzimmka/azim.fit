@@ -6,6 +6,7 @@ import {
 
 export const STORAGE_KEY_V1 = 'azim-fit-state-v1';
 export const STORAGE_KEY_V2 = 'azim-fit-state-v2';
+export const STORAGE_KEY_V3 = 'keep-at-it-state-v3';
 const GUEST_STORAGE_SCOPE = 'guest';
 
 function resolveStorage(storage) {
@@ -52,12 +53,16 @@ function sanitizeStorageScope(scope) {
   }).join('');
 }
 
-function parseV2State(raw, options) {
+function parseVersionedState(raw, schemaVersion, options) {
   const parsed = safeParse(raw);
-  if (!parsed.ok || !isObject(parsed.value) || parsed.value.schemaVersion !== 2) {
+  if (!parsed.ok || !isObject(parsed.value) || parsed.value.schemaVersion !== schemaVersion) {
     return null;
   }
   return normalizeAppState(parsed.value, options);
+}
+
+function legacyScopedStorageKey(scope) {
+  return `${STORAGE_KEY_V2}:${sanitizeStorageScope(scope)}`;
 }
 
 /**
@@ -66,24 +71,38 @@ function parseV2State(raw, options) {
  * @param {string|null|undefined} scope
  */
 export function getScopedStorageKey(scope) {
-  return `${STORAGE_KEY_V2}:${sanitizeStorageScope(scope)}`;
+  return `${STORAGE_KEY_V3}:${sanitizeStorageScope(scope)}`;
 }
 
 /**
+ * Loads the unscoped local profile, migrating V2 or V1 into V3 without
+ * modifying or deleting either legacy key.
  * @param {Storage|{getItem: Function, setItem: Function}|null} storage
  * @param {{idFactory?: (prefix?: string) => string, today?: string, now?: Date|number|string}} options
  */
 export function loadAppStateResult(storage, options = {}) {
   const target = resolveStorage(storage);
-  const rawV2 = safeGet(target, STORAGE_KEY_V2);
-  const parsedV2 = safeParse(rawV2);
-
-  if (parsedV2.ok && isObject(parsedV2.value) && parsedV2.value.schemaVersion === 2) {
+  const rawV3 = safeGet(target, STORAGE_KEY_V3);
+  const stateV3 = parseVersionedState(rawV3, 3, options);
+  if (stateV3) {
     return {
-      state: normalizeAppState(parsedV2.value, options),
-      source: 'v2',
+      state: stateV3,
+      source: 'v3',
       migrated: false,
       recovered: false,
+    };
+  }
+
+  const rawV2 = safeGet(target, STORAGE_KEY_V2);
+  const stateV2 = parseVersionedState(rawV2, 2, options);
+  if (stateV2) {
+    const persisted = saveAppState(stateV2, target, options);
+    return {
+      state: stateV2,
+      source: 'v2',
+      migrated: true,
+      recovered: rawV3 !== null,
+      persisted,
     };
   }
 
@@ -96,7 +115,7 @@ export function loadAppStateResult(storage, options = {}) {
       state,
       source: 'v1',
       migrated: true,
-      recovered: rawV2 !== null,
+      recovered: rawV3 !== null || rawV2 !== null,
       persisted,
     };
   }
@@ -105,7 +124,7 @@ export function loadAppStateResult(storage, options = {}) {
     state: createEmptyAppState(),
     source: 'empty',
     migrated: false,
-    recovered: rawV2 !== null || rawV1 !== null,
+    recovered: rawV3 !== null || rawV2 !== null || rawV1 !== null,
   };
 }
 
@@ -115,7 +134,7 @@ export function loadAppState(storage, options = {}) {
 }
 
 /**
- * @param {import('../domain/model.js').AppStateV2} state
+ * @param {import('../domain/model.js').AppStateV3} state
  * @param {Storage|{setItem: Function}|null} storage
  * @param {object} options
  */
@@ -123,7 +142,7 @@ export function saveAppState(state, storage, options = {}) {
   const target = resolveStorage(storage);
   if (!target?.setItem) return false;
   try {
-    target.setItem(STORAGE_KEY_V2, JSON.stringify(normalizeAppState(state, options)));
+    target.setItem(STORAGE_KEY_V3, JSON.stringify(normalizeAppState(state, options)));
     return true;
   } catch {
     return false;
@@ -131,8 +150,9 @@ export function saveAppState(state, storage, options = {}) {
 }
 
 /**
- * Loads an isolated local profile. Guests may migrate from the legacy keys;
- * authenticated users only ever read their own scoped key.
+ * Loads an isolated local profile. Authenticated users can migrate only their
+ * own scoped V2 profile. Guests additionally migrate unscoped V3/V2 and V1.
+ * Every legacy value is preserved byte-for-byte.
  * @param {string|null|undefined} scope
  * @param {Storage|{getItem: Function, setItem: Function}|null} storage
  * @param {{idFactory?: (prefix?: string) => string, today?: string, now?: Date|number|string}} options
@@ -140,15 +160,28 @@ export function saveAppState(state, storage, options = {}) {
 export function loadScopedAppStateResult(scope, storage, options = {}) {
   const target = resolveStorage(storage);
   const scopedKey = getScopedStorageKey(scope);
-  const rawScoped = safeGet(target, scopedKey);
-  const scopedState = parseV2State(rawScoped, options);
-
-  if (scopedState) {
+  const rawScopedV3 = safeGet(target, scopedKey);
+  const scopedV3 = parseVersionedState(rawScopedV3, 3, options);
+  if (scopedV3) {
     return {
-      state: scopedState,
-      source: 'scoped',
+      state: scopedV3,
+      source: 'scoped-v3',
       migrated: false,
       recovered: false,
+    };
+  }
+
+  const scopedV2Key = legacyScopedStorageKey(scope);
+  const rawScopedV2 = safeGet(target, scopedV2Key);
+  const scopedV2 = parseVersionedState(rawScopedV2, 2, options);
+  if (scopedV2) {
+    const persisted = saveScopedAppState(scope, scopedV2, target, options);
+    return {
+      state: scopedV2,
+      source: 'scoped-v2',
+      migrated: true,
+      recovered: rawScopedV3 !== null,
+      persisted,
     };
   }
 
@@ -157,19 +190,32 @@ export function loadScopedAppStateResult(scope, storage, options = {}) {
       state: createEmptyAppState(),
       source: 'empty',
       migrated: false,
-      recovered: rawScoped !== null,
+      recovered: rawScopedV3 !== null || rawScopedV2 !== null,
+    };
+  }
+
+  const rawV3 = safeGet(target, STORAGE_KEY_V3);
+  const unscopedV3 = parseVersionedState(rawV3, 3, options);
+  if (unscopedV3) {
+    const persisted = saveScopedAppState(scope, unscopedV3, target, options);
+    return {
+      state: unscopedV3,
+      source: 'v3',
+      migrated: true,
+      recovered: rawScopedV3 !== null || rawScopedV2 !== null,
+      persisted,
     };
   }
 
   const rawV2 = safeGet(target, STORAGE_KEY_V2);
-  const legacyV2State = parseV2State(rawV2, options);
-  if (legacyV2State) {
-    const persisted = saveScopedAppState(scope, legacyV2State, target, options);
+  const unscopedV2 = parseVersionedState(rawV2, 2, options);
+  if (unscopedV2) {
+    const persisted = saveScopedAppState(scope, unscopedV2, target, options);
     return {
-      state: legacyV2State,
+      state: unscopedV2,
       source: 'v2',
       migrated: true,
-      recovered: rawScoped !== null,
+      recovered: rawScopedV3 !== null || rawScopedV2 !== null || rawV3 !== null,
       persisted,
     };
   }
@@ -183,7 +229,10 @@ export function loadScopedAppStateResult(scope, storage, options = {}) {
       state,
       source: 'v1',
       migrated: true,
-      recovered: rawScoped !== null || rawV2 !== null,
+      recovered: rawScopedV3 !== null
+        || rawScopedV2 !== null
+        || rawV3 !== null
+        || rawV2 !== null,
       persisted,
     };
   }
@@ -192,7 +241,11 @@ export function loadScopedAppStateResult(scope, storage, options = {}) {
     state: createEmptyAppState(),
     source: 'empty',
     migrated: false,
-    recovered: rawScoped !== null || rawV2 !== null || rawV1 !== null,
+    recovered: rawScopedV3 !== null
+      || rawScopedV2 !== null
+      || rawV3 !== null
+      || rawV2 !== null
+      || rawV1 !== null,
   };
 }
 
@@ -207,7 +260,7 @@ export function loadScopedAppState(scope, storage, options = {}) {
 
 /**
  * @param {string|null|undefined} scope
- * @param {import('../domain/model.js').AppStateV2} state
+ * @param {import('../domain/model.js').AppStateV3} state
  * @param {Storage|{setItem: Function}|null} storage
  * @param {object} options
  */
@@ -226,8 +279,8 @@ export function saveScopedAppState(scope, state, storage, options = {}) {
 }
 
 /**
- * The adapter deliberately has no delete/clear operation, so the V1 key cannot
- * be removed accidentally after migration.
+ * The adapter deliberately has no delete/clear operation, so legacy keys
+ * cannot be removed accidentally after migration.
  * @param {Storage|object|null} storage
  * @param {object} options
  */

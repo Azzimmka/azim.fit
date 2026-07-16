@@ -40,6 +40,7 @@ test('verified user can read and write only their own tree', async () => {
   await assertSucceeds(setDoc(doc(alice, 'users/alice'), {
     uid: 'alice',
     email: 'alice@example.com',
+    schemaVersion: 3,
     avatarId: 'avatar-04',
     avatarSource: 'generated',
     googlePhotoURL: null,
@@ -47,6 +48,18 @@ test('verified user can read and write only their own tree', async () => {
   await assertSucceeds(setDoc(doc(alice, 'users/alice/workouts/workout-1'), {
     id: 'workout-1',
     title: 'Силовая',
+  }));
+  await assertSucceeds(setDoc(doc(alice, 'users/alice/customExercises/run'), {
+    id: 'run',
+    name: 'Бег',
+    structure: 'continuous',
+    target: { kind: 'distance', value: 3000, unit: 'meters' },
+  }));
+  await assertSucceeds(setDoc(doc(alice, 'users/alice/meta/app'), {
+    schemaVersion: 3,
+    settings: {},
+    activeTimer: null,
+    activeContinuousSession: null,
   }));
   await assertFails(getDoc(doc(bob, 'users/alice/workouts/workout-1')));
   await assertFails(setDoc(doc(bob, 'users/alice/workouts/intruder'), {
@@ -60,11 +73,23 @@ test('verified user can read and write only their own tree', async () => {
   await assertFails(setDoc(doc(alice, 'users/alice'), {
     uid: 'bob',
     email: 'alice@example.com',
+    schemaVersion: 3,
   }));
   await assertFails(setDoc(doc(alice, 'users/alice'), {
     uid: 'alice',
     email: 'alice@example.com',
+    schemaVersion: 3,
     role: 'admin',
+  }));
+  await assertFails(setDoc(doc(alice, 'users/alice/customExercises/path-id'), {
+    id: 'different-id',
+    name: 'Неверный ID',
+  }));
+  await assertFails(setDoc(doc(alice, 'users/alice/meta/app'), {
+    schemaVersion: 2,
+    settings: {},
+    activeTimer: null,
+    activeContinuousSession: null,
   }));
   await assertFails(setDoc(doc(alice, 'public/config'), { enabled: true }));
   assert.equal((await getDoc(doc(alice, 'users/alice/workouts/workout-1'))).data().title, 'Силовая');

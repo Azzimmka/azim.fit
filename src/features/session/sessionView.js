@@ -21,6 +21,14 @@ export function getSessionElapsedSeconds(startedAt, now = Date.now()) {
 
 export function countWorkoutSets(workout) {
   return (workout?.exercises ?? []).reduce((summary, exercise) => {
+    if (exercise.structure === 'continuous') {
+      const status = exercise.continuousResult?.status ?? 'pending';
+      return {
+        total: summary.total + 1,
+        completed: summary.completed + (status === 'completed' ? 1 : 0),
+        skipped: summary.skipped + (status === 'skipped' ? 1 : 0),
+      };
+    }
     const results = exercise.setResults ?? [];
     const total = Math.max(Number(exercise.sets) || 0, results.length);
     return {

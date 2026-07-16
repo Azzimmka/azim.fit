@@ -1,5 +1,5 @@
 /**
- * Canonical runtime constants for the local-first V2 model.
+ * Canonical runtime constants for the local-first V3 model.
  *
  * @typedef {'planned' | 'completed' | 'skipped'} WorkoutStatus
  * @typedef {'pending' | 'completed' | 'skipped'} SetResultStatus
@@ -9,7 +9,21 @@
  * @property {SetResultStatus} status
  * @property {number|null} weightKg
  * @property {number|null} reps
+ * @property {number|null} actualValue Canonical target-aware result value.
  * @property {number|null} rpe
+ * @property {string|null} completedAt
+ *
+ * @typedef {Object} ExerciseTarget
+ * @property {'reps'|'duration'|'distance'} kind
+ * @property {number} value
+ * @property {'count'|'seconds'|'meters'} unit
+ *
+ * @typedef {Object} ContinuousResult
+ * @property {SetResultStatus} status
+ * @property {number|null} actualValue
+ * @property {number|null} distanceMeters
+ * @property {number|null} activeDurationSeconds
+ * @property {number|null} averagePaceSecondsPerKm
  * @property {string|null} completedAt
  *
  * @typedef {Object} Exercise
@@ -24,6 +38,12 @@
  * @property {number|null} actualReps
  * @property {number|null} rpe
  * @property {SetResult[]} setResults
+ * @property {'sets'|'continuous'} structure
+ * @property {ExerciseTarget} target
+ * @property {string|null} legacyTargetText
+ * @property {string|null} catalogExerciseId
+ * @property {string|null} customExerciseId
+ * @property {ContinuousResult|null} continuousResult
  *
  * @typedef {Object} Workout
  * @property {string} id
@@ -47,7 +67,7 @@
  * @property {string} type
  * @property {string} time
  * @property {string} intensity
- * @property {Array<Pick<Exercise, 'id'|'name'|'sets'|'plannedReps'|'plannedWeightKg'|'restSeconds'>>} exercises
+ * @property {Exercise[]} exercises
  *
  * @typedef {Object} RecurrenceSeries
  * @property {string} id
@@ -81,18 +101,45 @@
  * @property {number} initialSeconds
  * @property {string|null} workoutId
  * @property {string|null} exerciseId
+ * @property {'work'|'rest'} phase
+ * @property {number|null} setIndex
  *
- * @typedef {Object} AppStateV2
- * @property {2} schemaVersion
+ * @typedef {Object} CustomExercise
+ * @property {string} id
+ * @property {string} name
+ * @property {string[]} aliases
+ * @property {string} category
+ * @property {'sets'|'continuous'} structure
+ * @property {ExerciseTarget} target
+ * @property {number} sets
+ * @property {number} restSeconds
+ * @property {string} createdAt
+ * @property {string} updatedAt
+ *
+ * @typedef {Object} ActiveContinuousSession
+ * @property {string} workoutId
+ * @property {string} exerciseId
+ * @property {'acquiring'|'active'|'paused'|'summary'} status
+ * @property {number} accumulatedMeters
+ * @property {number} activeDurationSeconds
+ * @property {string|null} startedAt
+ * @property {string|null} activeSince
+ * @property {string|null} pausedAt
+ * @property {string|null} updatedAt
+ *
+ * @typedef {Object} AppStateV3
+ * @property {3} schemaVersion
  * @property {Workout[]} workouts
  * @property {RecurrenceSeries[]} series
  * @property {Template[]} templates
+ * @property {CustomExercise[]} customExercises
  * @property {BodyWeightEntry[]} bodyWeightEntries
  * @property {AppSettings} settings
  * @property {ActiveTimer|null} activeTimer
+ * @property {ActiveContinuousSession|null} activeContinuousSession
  */
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 export const WORKOUT_STATUSES = Object.freeze(['planned', 'completed', 'skipped']);
 export const SET_RESULT_STATUSES = Object.freeze(['pending', 'completed', 'skipped']);
 export const DEFAULT_REST_SECONDS = 90;

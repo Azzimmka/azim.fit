@@ -1,5 +1,6 @@
 /* eslint-disable react-hooks/set-state-in-effect -- sync status follows an external subscription lifecycle */
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { SCHEMA_VERSION } from '../domain/model.js';
 import { createEmptyAppState } from '../domain/schema.js';
 import { ActionTypes } from '../store/reducer.js';
 import {
@@ -24,6 +25,7 @@ const SYNC_COLLECTION_KEYS = Object.freeze({
   series: 'id',
   templates: 'id',
   bodyWeightEntries: 'date',
+  customExercises: 'id',
 });
 
 function applyDocumentChanges(remoteItems, changes, key) {
@@ -54,6 +56,7 @@ function preserveLocalMetaWhenRemoteIsMissing(current, remote, metadata) {
     ...remote,
     settings: current.settings,
     activeTimer: current.activeTimer,
+    activeContinuousSession: current.activeContinuousSession,
   };
 }
 
@@ -77,7 +80,7 @@ function createProfile(user, settings = {}) {
     avatarId: settings.avatarId ?? null,
     avatarSource: settings.avatarSource ?? null,
     googlePhotoURL: user.photoURL ?? null,
-    schemaVersion: 2,
+    schemaVersion: SCHEMA_VERSION,
   };
 }
 

@@ -12,6 +12,7 @@ service cloud.firestore {
       allow read, delete: if isVerifiedOwner(uid);
       allow create, update: if isVerifiedOwner(uid)
         && request.resource.data.uid == uid
+        && request.resource.data.schemaVersion == 3
         && request.resource.data.keys().hasOnly([
           'uid', 'email', 'displayName', 'photoURL', 'avatarId',
           'avatarSource', 'googlePhotoURL', 'schemaVersion', '_sync'
@@ -41,12 +42,19 @@ service cloud.firestore {
           && request.resource.data.date == entryDate;
       }
 
+      match /customExercises/{exerciseId} {
+        allow read, delete: if isVerifiedOwner(uid);
+        allow create, update: if isVerifiedOwner(uid)
+          && request.resource.data.id == exerciseId;
+      }
+
       match /meta/app {
         allow read, delete: if isVerifiedOwner(uid);
         allow create, update: if isVerifiedOwner(uid)
-          && request.resource.data.schemaVersion == 2
+          && request.resource.data.schemaVersion == 3
           && request.resource.data.keys().hasOnly([
-            'schemaVersion', 'settings', 'activeTimer', '_sync'
+            'schemaVersion', 'settings', 'activeTimer',
+            'activeContinuousSession', '_sync'
           ]);
       }
     }

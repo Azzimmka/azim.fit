@@ -2,8 +2,8 @@ import { render, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { useTimerCompletionSound } from './useTimerCompletionSound.js';
 
-function SoundHarness({ play, snapshot }) {
-  useTimerCompletionSound(snapshot, { play });
+function SoundHarness({ play, snapshot, vibrate = () => {} }) {
+  useTimerCompletionSound(snapshot, { play, vibrate });
   return null;
 }
 
@@ -18,14 +18,17 @@ const runningSnapshot = {
 describe('useTimerCompletionSound', () => {
   it('plays once when an observed running timer reaches zero', async () => {
     const play = vi.fn().mockResolvedValue(true);
-    const { rerender } = render(<SoundHarness play={play} snapshot={runningSnapshot} />);
+    const vibrate = vi.fn();
+    const { rerender } = render(<SoundHarness play={play} vibrate={vibrate} snapshot={runningSnapshot} />);
 
     const expired = { ...runningSnapshot, status: 'expired', remainingSeconds: 0 };
-    rerender(<SoundHarness play={play} snapshot={expired} />);
+    rerender(<SoundHarness play={play} vibrate={vibrate} snapshot={expired} />);
     await waitFor(() => expect(play).toHaveBeenCalledOnce());
+    expect(vibrate).toHaveBeenCalledWith();
 
-    rerender(<SoundHarness play={play} snapshot={expired} />);
+    rerender(<SoundHarness play={play} vibrate={vibrate} snapshot={expired} />);
     expect(play).toHaveBeenCalledOnce();
+    expect(vibrate).toHaveBeenCalledOnce();
   });
 
   it('does not sound when the first observed snapshot is already expired', () => {

@@ -35,6 +35,7 @@ const REMOTE_COLLECTIONS = Object.freeze([
   Object.freeze({ source: 'series', path: 'series', key: 'id' }),
   Object.freeze({ source: 'templates', path: 'templates', key: 'id' }),
   Object.freeze({ source: 'bodyWeights', path: 'bodyWeights', key: 'date' }),
+  Object.freeze({ source: 'customExercises', path: 'customExercises', key: 'id' }),
 ]);
 const MAX_BATCH_OPERATIONS = 450;
 
@@ -114,6 +115,7 @@ export function createUserRepository({
         series: null,
         templates: null,
         bodyWeights: null,
+        customExercises: null,
         meta: null,
       };
       const metadataBySource = {};

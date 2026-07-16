@@ -39,6 +39,24 @@ describe('confirmed cloud baseline storage', () => {
       .toBeNull();
   });
 
+  it('migrates the legacy V2 baseline without modifying it', () => {
+    const uid = 'legacy-user';
+    const legacyKey = `azim-fit-cloud-baseline-v2:${encodeURIComponent(uid)}`;
+    const legacyBytes = JSON.stringify({
+      ...stateWithWorkout('legacy-confirmed'),
+      schemaVersion: 2,
+    });
+    globalThis.localStorage.setItem(legacyKey, legacyBytes);
+
+    const loaded = loadConfirmedCloudBaseline(uid, globalThis.localStorage, { today: TODAY });
+
+    expect(loaded).toMatchObject({
+      schemaVersion: 3,
+      workouts: [expect.objectContaining({ id: 'legacy-confirmed' })],
+    });
+    expect(globalThis.localStorage.getItem(legacyKey)).toBe(legacyBytes);
+  });
+
   it('ignores malformed values and storage failures', () => {
     const key = getConfirmedCloudBaselineKey('user-1');
     globalThis.localStorage.setItem(key, '{broken');

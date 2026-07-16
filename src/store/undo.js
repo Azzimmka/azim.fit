@@ -28,8 +28,8 @@ function addedKeys(before, after, key) {
 
 /**
  * Captures all entities removed by one reducer operation in a single snapshot.
- * @param {import('../domain/model.js').AppStateV2} before
- * @param {import('../domain/model.js').AppStateV2} after
+ * @param {import('../domain/model.js').AppStateV3} before
+ * @param {import('../domain/model.js').AppStateV3} after
  * @param {{now?: Date|number|string, ttlMs?: number}} options
  */
 export function createDeletionSnapshot(before, after, options = {}) {
@@ -74,7 +74,7 @@ function restoreCaptured(current, restored, addedKeysToRemove, key) {
 }
 
 /**
- * @param {import('../domain/model.js').AppStateV2} state
+ * @param {import('../domain/model.js').AppStateV3} state
  * @param {object} snapshot
  * @param {{now?: Date|number|string, ignoreExpiry?: boolean}} options
  */

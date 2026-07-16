@@ -1,5 +1,6 @@
 import { Check, ChevronRight, Edit3, Medal, Timer, TrendingUp, Trophy } from 'lucide-react';
 import { formatRuCount } from '../../domain/plural.js';
+import { formatDistance, formatDuration, formatPace } from '../../domain/targets.js';
 import { countWorkoutSets, formatSessionClock } from './sessionView.js';
 
 const RECORD_LABELS = {
@@ -30,6 +31,10 @@ export function SessionSummary({
   onCompleteWorkout,
 }) {
   const sets = countWorkoutSets(workout);
+  const totalDistance = (workout.exercises ?? []).reduce(
+    (sum, exercise) => sum + (Number(exercise.continuousResult?.distanceMeters) || 0),
+    0,
+  );
 
   return (
     <section className="session-summary" aria-labelledby="session-summary-title">
@@ -42,8 +47,8 @@ export function SessionSummary({
 
       <div className="session-summary-metrics">
         <article><Timer aria-hidden="true" /><span>Время</span><strong>{elapsedSeconds === null ? '—' : formatSessionClock(elapsedSeconds)}</strong></article>
-        <article><Check aria-hidden="true" /><span>Подходы</span><strong>{sets.completed}/{sets.total}</strong></article>
-        <article><TrendingUp aria-hidden="true" /><span>Объём</span><strong>{Math.round(volume).toLocaleString('ru-RU')} кг·повт.</strong></article>
+        <article><Check aria-hidden="true" /><span>Выполнено</span><strong>{sets.completed}/{sets.total}</strong></article>
+        <article><TrendingUp aria-hidden="true" /><span>{totalDistance > 0 ? 'Дистанция' : 'Объём'}</span><strong>{totalDistance > 0 ? formatDistance(totalDistance) : `${Math.round(volume).toLocaleString('ru-RU')} кг·повт.`}</strong></article>
         <article><Medal aria-hidden="true" /><span>Баллы</span><strong>+{points}</strong></article>
       </div>
 
@@ -58,6 +63,24 @@ export function SessionSummary({
         <div className="session-section-title"><div><p className="session-kicker">Результаты</p><h2 id="session-plan-review-title">Весь план</h2></div><button type="button" className="session-link-button" onClick={onEditResults}><Edit3 size={17} aria-hidden="true" /> Исправить</button></div>
         <div className="session-review-list">
           {(workout.exercises ?? []).map((exercise, index) => {
+            if (exercise.structure === 'continuous') {
+              const result = exercise.continuousResult;
+              const completed = result?.status === 'completed';
+              const details = completed
+                ? [
+                  result.distanceMeters ? formatDistance(result.distanceMeters) : null,
+                  result.activeDurationSeconds ? formatDuration(result.activeDurationSeconds) : null,
+                  result.averagePaceSecondsPerKm ? formatPace(result.averagePaceSecondsPerKm) : null,
+                ].filter(Boolean).join(' · ')
+                : 'Пропущено';
+              return (
+                <div key={exercise.id}>
+                  <span>{String(index + 1).padStart(2, '0')}</span>
+                  <div><strong>{exercise.name}</strong><small>{details}</small></div>
+                  <ChevronRight size={18} aria-hidden="true" />
+                </div>
+              );
+            }
             const completed = (exercise.setResults ?? []).filter((result) => result.status === 'completed').length;
             const skipped = (exercise.setResults ?? []).filter((result) => result.status === 'skipped').length;
             return (

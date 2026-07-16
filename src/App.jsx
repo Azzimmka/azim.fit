@@ -58,7 +58,8 @@ import {
 } from './store/index.js';
 
 const VALID_PLAN_TABS = new Set(['calendar', 'missed', 'templates']);
-const GUEST_CLAIM_KEY = 'azim-fit-state-v2:guest-claimed-by';
+const GUEST_CLAIM_KEY = 'keep-at-it-state-v3:guest-claimed-by';
+const LEGACY_GUEST_CLAIM_KEY = 'azim-fit-state-v2:guest-claimed-by';
 const AUTH_PATHS = new Set(['/login', '/register', '/forgot-password']);
 
 function useCurrentCalendarDate() {
@@ -96,7 +97,7 @@ function createDemoState(today) {
   const tomorrow = addCalendarDays(today, 1);
   const completedAt = new Date(`${yesterday}T19:15:00`).toISOString();
   const baseState = normalizeAppState({
-    schemaVersion: 2,
+    schemaVersion: 3,
     workouts: [
       {
         id: 'demo-completed',
@@ -262,6 +263,7 @@ function WorkoutSessionRoute({
   state,
   today,
   timerSnapshot,
+  activeContinuousSession,
   sessionActions,
 }) {
   const { id } = useParams();
@@ -297,6 +299,7 @@ function WorkoutSessionRoute({
       workouts={state.workouts}
       today={today}
       timerSnapshot={timerSnapshot}
+      activeContinuousSession={activeContinuousSession}
       personalRecords={personalRecords}
       onBack={() => navigate(returnTo, { replace: true })}
       {...sessionActions}
@@ -313,7 +316,9 @@ function loadInitialStateForScope(user, today) {
 
   let claimedBy;
   try {
-    claimedBy = storage?.getItem(GUEST_CLAIM_KEY) ?? null;
+    claimedBy = storage?.getItem(GUEST_CLAIM_KEY)
+      ?? storage?.getItem(LEGACY_GUEST_CLAIM_KEY)
+      ?? null;
   } catch {
     claimedBy = null;
   }
@@ -388,7 +393,8 @@ function AppContent({ authState }) {
     state,
     dispatch,
     today,
-    enabled: firebaseConfigured,
+    enabled: firebaseConfigured
+      && !['active', 'acquiring'].includes(state.activeContinuousSession?.status),
     onEvent: handleSyncEvent,
   });
 
@@ -445,13 +451,6 @@ function AppContent({ authState }) {
     window.addEventListener('storage', handleStorage);
     return () => window.removeEventListener('storage', handleStorage);
   }, [storageScope, today]);
-
-  useEffect(() => {
-    if (!undo) return undefined;
-    const delay = Math.max(0, new Date(undo.snapshot.expiresAt).getTime() - Date.now());
-    const timeoutId = window.setTimeout(() => setUndo(null), delay);
-    return () => window.clearTimeout(timeoutId);
-  }, [undo]);
 
   useEffect(() => {
     if (!state.activeTimer || state.activeTimer.status !== 'running') return undefined;
@@ -691,9 +690,26 @@ function AppContent({ authState }) {
   const timerSnapshot = getTimerSnapshot(state.activeTimer);
   useTimerCompletionSound(timerSnapshot);
   useEffect(() => {
-    if (!timerSnapshot.expired || timerSnapshot.workoutId) return;
-    dispatch({ type: ActionTypes.TIMER_FINISH });
-  }, [timerSnapshot.endsAt, timerSnapshot.expired, timerSnapshot.workoutId]);
+    if (!timerSnapshot.expired) return;
+    if (timerSnapshot.phase === 'work' || !timerSnapshot.workoutId) {
+      dispatch({
+        type: ActionTypes.TIMER_FINISH,
+        payload: { now: new Date().toISOString() },
+      });
+    }
+  }, [timerSnapshot.endsAt, timerSnapshot.expired, timerSnapshot.phase, timerSnapshot.workoutId]);
+  useEffect(() => {
+    const pauseOnHidden = () => {
+      if (document.visibilityState !== 'hidden') return;
+      if (!['active', 'acquiring'].includes(state.activeContinuousSession?.status)) return;
+      dispatch({
+        type: ActionTypes.WORKOUT_SESSION_PAUSE_CONTINUOUS,
+        payload: { now: new Date().toISOString() },
+      });
+    };
+    document.addEventListener('visibilitychange', pauseOnHidden);
+    return () => document.removeEventListener('visibilitychange', pauseOnHidden);
+  }, [state.activeContinuousSession?.status]);
   const timerWorkout = state.workouts.find((workout) => workout.id === timerSnapshot.workoutId);
   const timerExercise = timerWorkout?.exercises.find((exercise) => exercise.id === timerSnapshot.exerciseId);
   const sessionActions = {
@@ -708,6 +724,57 @@ function AppContent({ authState }) {
         payload: { ...payload, now: new Date().toISOString() },
       });
     },
+    onStartTimedSet: (payload) => {
+      void prepareTimerSound();
+      dispatch({
+        type: ActionTypes.WORKOUT_SESSION_START_TIMED_SET,
+        payload: { ...payload, now: new Date().toISOString() },
+      });
+    },
+    onFinishTimedSet: () => dispatch({
+      type: ActionTypes.WORKOUT_SESSION_FINISH_TIMED_SET,
+      payload: { now: new Date().toISOString() },
+    }),
+    onStartContinuous: (payload) => dispatch({
+      type: ActionTypes.WORKOUT_SESSION_START_CONTINUOUS,
+      payload,
+    }),
+    onContinuousGpsReady: (payload) => dispatch({
+      type: ActionTypes.WORKOUT_SESSION_CONTINUOUS_GPS_READY,
+      payload,
+    }),
+    onContinuousGpsDelta: (payload) => dispatch({
+      type: ActionTypes.WORKOUT_SESSION_CONTINUOUS_ACCEPT_DELTA,
+      payload,
+    }),
+    onContinuousTick: (payload) => dispatch({
+      type: ActionTypes.WORKOUT_SESSION_CONTINUOUS_TICK,
+      payload,
+    }),
+    onPauseContinuous: (payload) => dispatch({
+      type: ActionTypes.WORKOUT_SESSION_PAUSE_CONTINUOUS,
+      payload,
+    }),
+    onResumeContinuous: (payload) => dispatch({
+      type: ActionTypes.WORKOUT_SESSION_RESUME_CONTINUOUS,
+      payload,
+    }),
+    onReviewContinuous: (payload) => dispatch({
+      type: ActionTypes.WORKOUT_SESSION_REVIEW_CONTINUOUS,
+      payload,
+    }),
+    onCompleteContinuous: (payload) => dispatch({
+      type: ActionTypes.WORKOUT_SESSION_COMPLETE_CONTINUOUS,
+      payload,
+    }),
+    onUpdateContinuous: (payload) => dispatch({
+      type: ActionTypes.WORKOUT_SESSION_UPDATE_CONTINUOUS,
+      payload,
+    }),
+    onCancelContinuous: (payload) => dispatch({
+      type: ActionTypes.WORKOUT_SESSION_CANCEL_CONTINUOUS,
+      payload,
+    }),
     onUpdateSet: (payload) => dispatch({
       type: ActionTypes.WORKOUT_SESSION_UPDATE_SET,
       payload,
@@ -906,6 +973,7 @@ function AppContent({ authState }) {
               state={state}
               today={today}
               timerSnapshot={timerSnapshot}
+              activeContinuousSession={state.activeContinuousSession}
               sessionActions={sessionActions}
             />
           )}
@@ -918,10 +986,15 @@ function AppContent({ authState }) {
         <RestTimer
           remainingSeconds={timerSnapshot.remainingSeconds}
           status={timerSnapshot.status}
-          label={timerExercise ? `Отдых · ${timerExercise.name}` : 'Таймер отдыха'}
+          mode={timerSnapshot.phase === 'work' ? 'work' : 'rest'}
+          label={timerExercise
+            ? `${timerSnapshot.phase === 'work' ? 'Подход' : 'Отдых'} · ${timerExercise.name}`
+            : 'Таймер отдыха'}
           onPause={() => dispatch({ type: ActionTypes.TIMER_PAUSE })}
           onResume={() => dispatch({ type: ActionTypes.TIMER_RESUME })}
-          onAddThirty={() => dispatch({ type: ActionTypes.TIMER_ADD_SECONDS, payload: { seconds: 30 } })}
+          onAddThirty={timerSnapshot.phase === 'work'
+            ? undefined
+            : () => dispatch({ type: ActionTypes.TIMER_ADD_SECONDS, payload: { seconds: 30 } })}
           onCancel={() => dispatch({ type: ActionTypes.TIMER_CANCEL })}
         />
       )}
@@ -932,6 +1005,11 @@ function AppContent({ authState }) {
         initialDate={editor?.initialDate ?? today}
         workout={editor?.workout}
         template={editor?.template}
+        appState={state}
+        onCustomExerciseCreate={(exercise) => dispatch({
+          type: ActionTypes.CUSTOM_EXERCISE_ADD,
+          payload: { exercise },
+        })}
         onClose={closeEditor}
         onSubmit={submitEditor}
       />
@@ -951,6 +1029,7 @@ function AppContent({ authState }) {
           variant="info"
           title={undo.label}
           message="Отменить можно в течение 8 секунд."
+          autoDismissMs={8_000}
           onUndo={() => {
             dispatch({ type: ActionTypes.UNDO_DELETE, payload: { snapshot: undo.snapshot } });
             setUndo(null);

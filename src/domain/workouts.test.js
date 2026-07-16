@@ -3,10 +3,12 @@ import { normalizeWorkout } from './schema.js';
 import {
   calculateExerciseVolume,
   calculateWorkoutVolume,
+  completeContinuousExercise,
   completeWorkout,
   completeWorkoutSet,
   correctWorkoutResult,
   findFirstPendingWorkoutSet,
+  findFirstPendingWorkoutUnit,
   getPlannedBodyweightSetResult,
   getWorkoutSetDefaults,
   skipRemainingExerciseSets,
@@ -39,15 +41,28 @@ describe('per-set workout operations', () => {
     expect(getPlannedBodyweightSetResult({ plannedReps: '15', plannedWeightKg: 80 })).toEqual({
       weightKg: null,
       reps: 15,
+      actualValue: 15,
       rpe: null,
     });
     expect(getPlannedBodyweightSetResult({ plannedReps: '30 сек' })).toEqual({
       weightKg: null,
       reps: null,
+      actualValue: null,
       rpe: null,
     });
     expect(getPlannedBodyweightSetResult({ plannedReps: '0' }).reps).toBeNull();
     expect(getPlannedBodyweightSetResult({ plannedReps: '1000' }).reps).toBeNull();
+  });
+
+  it('uses the canonical target value for reps and timed sets', () => {
+    expect(getPlannedBodyweightSetResult({
+      target: { kind: 'reps', value: 12, unit: 'count' },
+      plannedReps: 'legacy',
+    })).toEqual({ weightKg: null, reps: 12, actualValue: 12, rpe: null });
+    expect(getPlannedBodyweightSetResult({
+      target: { kind: 'duration', value: 180, unit: 'seconds' },
+      plannedReps: 'legacy',
+    })).toEqual({ weightKg: null, reps: null, actualValue: 180, rpe: null });
   });
 
   it('starts once and restores the first pending set', () => {
@@ -303,6 +318,60 @@ describe('per-set workout operations', () => {
     }).status).toBe('completed');
     expect(completeWorkout(pending, {
       completedAt: '2026-07-13T10:00:00.000Z',
+    }).status).toBe('completed');
+  });
+
+  it('treats a continuous exercise as one pending progress unit', () => {
+    const workout = normalizeWorkout({
+      id: 'mixed',
+      status: 'planned',
+      plannedDate: '2026-07-13',
+      exercises: [
+        {
+          id: 'run',
+          name: 'Бег',
+          structure: 'continuous',
+          target: { kind: 'distance', value: 3000 },
+        },
+        { id: 'press', name: 'Отжимания', sets: 1, plannedReps: '10' },
+      ],
+    });
+
+    expect(findFirstPendingWorkoutSet(workout)).toMatchObject({ exerciseId: 'press', setIndex: 0 });
+    expect(findFirstPendingWorkoutUnit(workout)).toMatchObject({ kind: 'continuous', exerciseId: 'run' });
+
+    const completed = completeContinuousExercise(workout, 'run', {
+      status: 'completed',
+      actualValue: 3120,
+      activeDurationSeconds: 900,
+      averagePaceSecondsPerKm: 288,
+      completedAt: '2026-07-13T10:15:00.000Z',
+    });
+    expect(completed.exercises[0].continuousResult).toMatchObject({ status: 'completed', actualValue: 3120 });
+    expect(findFirstPendingWorkoutUnit(completed)).toMatchObject({ kind: 'set', exerciseId: 'press' });
+  });
+
+  it('requires a continuous result before active-session completion', () => {
+    const workout = normalizeWorkout({
+      id: 'run-only',
+      status: 'planned',
+      plannedDate: '2026-07-13',
+      exercises: [{
+        id: 'run',
+        name: 'Бег',
+        structure: 'continuous',
+        target: { kind: 'duration', value: 1200 },
+      }],
+    });
+    expect(completeWorkout(workout, {
+      completedAt: '2026-07-13T11:00:00.000Z',
+      requireResolvedSets: true,
+    })).toBe(workout);
+    const skipped = skipRemainingExerciseSets(workout, 'run');
+    expect(skipped.exercises[0].continuousResult.status).toBe('skipped');
+    expect(completeWorkout(skipped, {
+      completedAt: '2026-07-13T11:00:00.000Z',
+      requireResolvedSets: true,
     }).status).toBe('completed');
   });
 

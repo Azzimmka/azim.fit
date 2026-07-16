@@ -8,6 +8,10 @@ import {
 describe('points', () => {
   it('centralizes the 20 + 5 per set formula', () => {
     expect(calculatePlanPoints([{ sets: 4 }, { sets: 3 }])).toBe(55);
+    expect(calculatePlanPoints([{
+      structure: 'continuous',
+      target: { kind: 'distance', value: 3000, unit: 'meters' },
+    }])).toBe(25);
     expect(calculateAwardedPoints([{ completedSets: 4 }, { completedSets: 2 }])).toBe(50);
     expect(calculateAwardedPoints([{
       completedSets: 99,
@@ -16,6 +20,10 @@ describe('points', () => {
         { status: 'skipped' },
         { status: 'pending' },
       ],
+    }])).toBe(25);
+    expect(calculateAwardedPoints([{
+      structure: 'continuous',
+      continuousResult: { status: 'completed' },
     }])).toBe(25);
   });
 

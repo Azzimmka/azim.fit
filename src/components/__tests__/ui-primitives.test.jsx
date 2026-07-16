@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 import { useRef, useState } from 'react';
 import '@testing-library/jest-dom/vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CalendarDays } from 'lucide-react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { prepareTimerSound } from '../../features/timer/timerSound.js';
 import { ConfirmScopeDialog, EmptyState, Modal, RestTimer, Toast } from '../index.js';
 
@@ -14,6 +14,10 @@ vi.mock('../../features/timer/timerSound.js', () => ({
 
 beforeEach(() => {
   vi.mocked(prepareTimerSound).mockReset();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe('Modal', () => {
@@ -97,6 +101,33 @@ describe('Toast', () => {
     await user.click(screen.getByRole('button', { name: 'Отменить' }));
     await user.click(screen.getByRole('button', { name: 'Закрыть уведомление' }));
     expect(onUndo).toHaveBeenCalledOnce();
+    expect(onDismiss).toHaveBeenCalledOnce();
+  });
+
+  it('dismisses ordinary notifications automatically after three seconds', () => {
+    vi.useFakeTimers();
+    const onDismiss = vi.fn();
+    render(<Toast title="Тренировка запланирована" onDismiss={onDismiss} />);
+
+    act(() => vi.advanceTimersByTime(2_999));
+    expect(onDismiss).not.toHaveBeenCalled();
+    act(() => vi.advanceTimersByTime(1));
+    expect(onDismiss).toHaveBeenCalledOnce();
+  });
+
+  it('supports the eight-second undo window and resets when the notice changes', () => {
+    vi.useFakeTimers();
+    const onDismiss = vi.fn();
+    const { rerender } = render(
+      <Toast title="Тренировка удалена" onDismiss={onDismiss} autoDismissMs={8_000} />,
+    );
+
+    act(() => vi.advanceTimersByTime(7_000));
+    expect(onDismiss).not.toHaveBeenCalled();
+    rerender(<Toast title="Шаблон удалён" onDismiss={onDismiss} autoDismissMs={8_000} />);
+    act(() => vi.advanceTimersByTime(1_000));
+    expect(onDismiss).not.toHaveBeenCalled();
+    act(() => vi.advanceTimersByTime(7_000));
     expect(onDismiss).toHaveBeenCalledOnce();
   });
 });

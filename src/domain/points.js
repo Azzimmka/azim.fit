@@ -1,3 +1,5 @@
+import { countExerciseProgressUnits } from './targets.js';
+
 const BASE_WORKOUT_POINTS = 20;
 const POINTS_PER_SET = 5;
 
@@ -8,19 +10,25 @@ function toSetCount(value) {
 
 /** @param {Array<{sets?: number}>} exercises */
 export function calculatePlanPoints(exercises = []) {
-  const sets = exercises.reduce((sum, exercise) => sum + toSetCount(exercise?.sets), 0);
-  return BASE_WORKOUT_POINTS + sets * POINTS_PER_SET;
+  const units = exercises.reduce(
+    (sum, exercise) => sum + countExerciseProgressUnits(exercise, false),
+    0,
+  );
+  return BASE_WORKOUT_POINTS + units * POINTS_PER_SET;
 }
 
 /** @param {Array<{completedSets?: number, setResults?: Array<{status?: string}>}>} exercises */
 export function calculateAwardedPoints(exercises = []) {
-  const sets = exercises.reduce((sum, exercise) => {
+  const units = exercises.reduce((sum, exercise) => {
+    if (exercise?.structure === 'continuous') {
+      return sum + (exercise.continuousResult?.status === 'completed' ? 1 : 0);
+    }
     if (Array.isArray(exercise?.setResults)) {
       return sum + exercise.setResults.filter((result) => result?.status === 'completed').length;
     }
     return sum + toSetCount(exercise?.completedSets);
   }, 0);
-  return BASE_WORKOUT_POINTS + sets * POINTS_PER_SET;
+  return BASE_WORKOUT_POINTS + units * POINTS_PER_SET;
 }
 
 /** @param {{status?: string, pointsAwarded?: number, exercises?: Array<object>}} workout */

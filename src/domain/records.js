@@ -60,6 +60,7 @@ export function calculatePersonalRecords(workouts = []) {
 
   for (const workout of completed) {
     for (const exercise of workout.exercises ?? []) {
+      if (exercise?.target?.kind && exercise.target.kind !== 'reps') continue;
       const key = normalizeExerciseName(exercise.name);
       const setResults = getCompletedSetResults(exercise);
       if (!key || setResults.length === 0) continue;

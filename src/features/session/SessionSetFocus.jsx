@@ -20,8 +20,14 @@ export function SessionSetFocus({
   onComplete,
 }) {
   const [submitting, setSubmitting] = useState(false);
-  const plannedReps = parsePlannedReps(exercise?.plannedReps);
-  const planLabel = String(exercise?.plannedReps ?? '').trim() || 'По плану';
+  const legacyPlanLabel = String(exercise?.legacyTargetText ?? '').trim();
+  const targetReps = exercise?.target?.kind === 'reps' && !legacyPlanLabel
+    ? Number(exercise.target.value)
+    : null;
+  const plannedReps = Number.isInteger(targetReps) && targetReps >= 1 && targetReps <= 999
+    ? targetReps
+    : parsePlannedReps(exercise?.plannedReps);
+  const planLabel = legacyPlanLabel || String(exercise?.plannedReps ?? '').trim() || 'По плану';
 
   const completeSet = () => {
     if (submitting || !onComplete) return;

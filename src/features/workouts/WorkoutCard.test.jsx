@@ -98,6 +98,7 @@ describe('WorkoutCard', () => {
     );
 
     await user.click(screen.getByRole('button', { name: 'Действия: Ноги' }));
+    expect(screen.getByRole('button', { name: 'Действия: Ноги' }).closest('details')).toHaveAttribute('open');
     await user.click(screen.getByRole('button', { name: 'Удалить' }));
 
     expect(onDelete).toHaveBeenCalledWith(workout);

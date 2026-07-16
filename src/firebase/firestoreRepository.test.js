@@ -105,6 +105,14 @@ describe('Firestore sync state helpers', () => {
     expect(isAppStateEmpty(createEmptyAppState())).toBe(true);
     expect(isAppStateEmpty(stateWith({ workouts: [workout('w', 'Тренировка')] }))).toBe(false);
     expect(isAppStateEmpty(stateWith({
+      customExercises: [{
+        id: 'custom-1',
+        name: 'Моё упражнение',
+        structure: 'sets',
+        target: { kind: 'reps', value: 10, unit: 'count' },
+      }],
+    }))).toBe(false);
+    expect(isAppStateEmpty(stateWith({
       activeTimer: {
         status: 'paused',
         endsAt: null,
@@ -119,6 +127,12 @@ describe('Firestore sync state helpers', () => {
   it('merges by stable id/date deterministically with remote collision precedence', () => {
     const local = stateWith({
       workouts: [workout('b', 'Локальная B'), workout('a', 'Только локальная')],
+      customExercises: [{
+        id: 'custom-a',
+        name: 'Локальное упражнение',
+        structure: 'sets',
+        target: { kind: 'reps', value: 8, unit: 'count' },
+      }],
       bodyWeightEntries: [
         { date: '2026-07-13', weightKg: 81 },
         { date: '2026-07-14', weightKg: 80, updatedAt: '2026-07-14T08:00:00.000Z' },
@@ -126,6 +140,12 @@ describe('Firestore sync state helpers', () => {
     });
     const remote = stateWith({
       workouts: [workout('c', 'Только облачная'), workout('b', 'Облачная B')],
+      customExercises: [{
+        id: 'custom-b',
+        name: 'Облачное упражнение',
+        structure: 'continuous',
+        target: { kind: 'distance', value: 3000, unit: 'meters' },
+      }],
       bodyWeightEntries: [
         { date: '2026-07-14', weightKg: 79.5, updatedAt: '2026-07-14T09:00:00.000Z' },
         { date: '2026-07-15', weightKg: 79 },
@@ -151,6 +171,7 @@ describe('Firestore sync state helpers', () => {
     ]);
     expect(merged.bodyWeightEntries.find((item) => item.date === '2026-07-14').weightKg)
       .toBe(79.5);
+    expect(merged.customExercises.map((item) => item.id)).toEqual(['custom-a', 'custom-b']);
     expect(merged.activeTimer).toMatchObject({
       workoutId: 'b',
       exerciseId: 'b-exercise',
@@ -188,6 +209,13 @@ describe('Firestore sync state helpers', () => {
       }],
       series: [],
       templates: [],
+      customExercises: [{
+        id: 'custom-run',
+        name: 'Бег в парке',
+        structure: 'continuous',
+        target: { kind: 'distance', value: 3000, unit: 'meters' },
+        _sync: { updatedAt: { seconds: 9 } },
+      }],
       bodyWeights: [{
         date: '2026-07-15',
         weightKg: 78.5,
@@ -208,7 +236,7 @@ describe('Firestore sync state helpers', () => {
       },
     });
 
-    expect(state.schemaVersion).toBe(2);
+    expect(state.schemaVersion).toBe(3);
     expect(state.workouts[0].id).toBe('cloud-workout');
     expect(state.bodyWeightEntries).toEqual([
       expect.objectContaining({ date: '2026-07-15', weightKg: 78.5 }),
@@ -217,6 +245,9 @@ describe('Firestore sync state helpers', () => {
       workoutId: 'cloud-workout',
       exerciseId: 'cloud-workout-exercise',
     });
+    expect(state.customExercises).toEqual([
+      expect.objectContaining({ id: 'custom-run', name: 'Бег в парке' }),
+    ]);
     expect(JSON.stringify(state)).not.toContain('_sync');
   });
 
@@ -229,6 +260,12 @@ describe('Firestore sync state helpers', () => {
     });
     const next = stateWith({
       workouts: [workout('shared', 'После'), workout('new', 'Добавить')],
+      customExercises: [{
+        id: 'custom-run',
+        name: 'Бег',
+        structure: 'continuous',
+        target: { kind: 'distance', value: 5000, unit: 'meters' },
+      }],
       bodyWeightEntries: previous.bodyWeightEntries,
       activeTimer: {
         status: 'paused',
@@ -244,6 +281,7 @@ describe('Firestore sync state helpers', () => {
     expect(diff.collections.workouts.sets.map((item) => item.id)).toEqual(['new', 'shared']);
     expect(diff.collections.workouts.deletes).toEqual(['old']);
     expect(diff.collections.bodyWeightEntries).toEqual({ sets: [], deletes: [] });
+    expect(diff.collections.customExercises.sets.map((item) => item.id)).toEqual(['custom-run']);
     expect(diff.meta.changed).toBe(true);
     expect(diff.hasChanges).toBe(true);
     expect(diffAppStates(next, structuredClone(next)).hasChanges).toBe(false);
@@ -259,7 +297,7 @@ describe('createUserRepository', () => {
 
     const unsubscribe = repository.subscribe('user-1', onState, onError);
 
-    expect(harness.listeners.size).toBe(5);
+    expect(harness.listeners.size).toBe(6);
     harness.emitCollection('users/user-1/workouts', [{
       id: 'workout-1',
       data: { ...workout('workout-1', 'Firestore'), id: undefined, _sync: { updatedAt: 1 } },
@@ -271,6 +309,15 @@ describe('createUserRepository', () => {
       data: {
         weightKg: 79,
         updatedAt: '2026-07-15T08:00:00.000Z',
+        _sync: { updatedAt: 2 },
+      },
+    }]);
+    harness.emitCollection('users/user-1/customExercises', [{
+      id: 'custom-run',
+      data: {
+        name: 'Бег',
+        structure: 'continuous',
+        target: { kind: 'distance', value: 3000, unit: 'meters' },
         _sync: { updatedAt: 2 },
       },
     }]);
@@ -288,6 +335,7 @@ describe('createUserRepository', () => {
     const payload = onState.mock.calls[0][0];
     expect(payload.state.workouts[0].id).toBe('workout-1');
     expect(payload.state.bodyWeightEntries[0].date).toBe('2026-07-15');
+    expect(payload.state.customExercises[0].id).toBe('custom-run');
     expect(payload.metadata).toEqual({
       ready: true,
       fromCache: true,
@@ -391,6 +439,7 @@ describe('createUserRepository', () => {
     harness.emitCollection('users/user-1/series', []);
     harness.emitCollection('users/user-1/templates', []);
     harness.emitCollection('users/user-1/bodyWeights', []);
+    harness.emitCollection('users/user-1/customExercises', []);
     harness.emitDocument('users/user-1/meta/app', null);
 
     expect(onState).toHaveBeenCalledWith(expect.objectContaining({

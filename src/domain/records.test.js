@@ -119,4 +119,24 @@ describe('personal records', () => {
     expect(press.reps).toBeNull();
     expect(pushups.reps.value).toBe(25);
   });
+
+  it('ignores duration and distance results for personal records', () => {
+    const workout = completedWorkout({
+      id: 'timed',
+      completedAt: '2026-07-12T10:00:00.000Z',
+      exercises: [{
+        id: 'plank',
+        name: 'Планка',
+        structure: 'sets',
+        target: { kind: 'duration', value: 180, unit: 'seconds' },
+        sets: 2,
+        setResults: [
+          { status: 'completed', actualValue: 180 },
+          { status: 'completed', actualValue: 150 },
+        ],
+      }],
+    });
+
+    expect(calculatePersonalRecords([workout])).toEqual([]);
+  });
 });

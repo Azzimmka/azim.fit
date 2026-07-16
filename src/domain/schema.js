@@ -18,6 +18,11 @@ import {
   WORKOUT_STATUSES,
 } from './model.js';
 import { calculateAwardedPoints } from './points.js';
+import {
+  normalizeExerciseStructure,
+  normalizeTarget,
+  parseLegacyPlannedTarget,
+} from './targets.js';
 import { normalizeActiveTimerForWorkouts, normalizeRestSeconds } from './timer.js';
 
 const PROFILE_AVATAR_ID_PATTERN = /^avatar-(0[1-9]|10)$/;
@@ -58,6 +63,17 @@ function toRepsOrNull(value) {
   return Number.isInteger(number) && number >= 1 && number <= 999 ? number : null;
 }
 
+function toTargetValueOrNull(value, kind) {
+  if (value === null || value === undefined || value === '') return null;
+  const number = Number(value);
+  if (!Number.isFinite(number)) return null;
+  const rounded = Math.round(number);
+  if (kind === 'reps') return Number.isInteger(number) && rounded >= 1 && rounded <= 999 ? rounded : null;
+  if (kind === 'duration') return rounded >= 1 && rounded <= 86_400 ? rounded : null;
+  if (kind === 'distance') return rounded >= 1 && rounded <= 1_000_000 ? rounded : null;
+  return null;
+}
+
 function toRpeOrNull(value) {
   if (value === null || value === undefined || value === '') return null;
   const number = Number(value);
@@ -88,16 +104,26 @@ function ensureUniqueIds(items, prefix, idFactory) {
  */
 export function normalizeSetResult(input, setNumber, options = {}) {
   const source = isRecord(input) ? input : {};
+  const targetKind = ['reps', 'duration', 'distance'].includes(options.targetKind)
+    ? options.targetKind
+    : 'reps';
   const status = options.forcePending === true
     ? 'pending'
     : (SET_RESULT_STATUSES.includes(source.status) ? source.status : 'pending');
   const keepValues = status !== 'skipped';
+  const actualValue = keepValues
+    ? toTargetValueOrNull(
+      source.actualValue ?? (targetKind === 'reps' ? source.reps ?? source.actualReps : null),
+      targetKind,
+    )
+    : null;
 
   return {
     setNumber,
     status,
     weightKg: keepValues ? toWeightOrNull(source.weightKg ?? source.actualWeightKg) : null,
-    reps: keepValues ? toRepsOrNull(source.reps ?? source.actualReps) : null,
+    reps: targetKind === 'reps' ? actualValue : null,
+    actualValue,
     rpe: keepValues ? toRpeOrNull(source.rpe) : null,
     completedAt: status === 'completed'
       ? toIsoTimestamp(source.completedAt, options.completedAt ?? null)
@@ -106,13 +132,13 @@ export function normalizeSetResult(input, setNumber, options = {}) {
 }
 
 /** @param {import('./model.js').SetResult[]} setResults */
-function aggregateSetResults(setResults) {
+function aggregateSetResults(setResults, targetKind = 'reps') {
   const completed = setResults.filter((result) => result.status === 'completed');
   const lastCompleted = completed.at(-1) ?? null;
   return {
     completedSets: completed.length,
     actualWeightKg: lastCompleted?.weightKg ?? null,
-    actualReps: lastCompleted?.reps ?? null,
+    actualReps: targetKind === 'reps' ? lastCompleted?.actualValue ?? lastCompleted?.reps ?? null : null,
     rpe: lastCompleted?.rpe ?? null,
   };
 }
@@ -124,28 +150,41 @@ function aggregateSetResults(setResults) {
  */
 export function normalizeExercise(input, options = {}) {
   const source = isRecord(input) ? input : {};
-  const sets = toBoundedInteger(source.sets, 1, 1, MAX_EXERCISE_SETS);
   const plannedRepsValue = source.plannedReps ?? source.reps ?? '10';
-  const plannedReps = String(plannedRepsValue ?? '').trim() || '10';
+  const parsedLegacyTarget = parseLegacyPlannedTarget(plannedRepsValue);
+  const target = isRecord(source.target)
+    ? normalizeTarget(source.target)
+    : parsedLegacyTarget.target;
+  const structure = normalizeExerciseStructure(source.structure, target);
+  const sets = structure === 'continuous'
+    ? 1
+    : toBoundedInteger(source.sets, 1, 1, MAX_EXERCISE_SETS);
+  const legacyTargetText = toText(source.legacyTargetText)
+    || (isRecord(source.target) ? null : parsedLegacyTarget.legacyTargetText);
+  const plannedReps = legacyTargetText
+    || (target.kind === 'reps' ? String(target.value) : `${target.value} ${target.unit}`);
   const planningOnly = options.planningOnly === true;
   let setResults;
 
-  if (planningOnly) {
+  if (structure === 'continuous') {
+    setResults = [];
+  } else if (planningOnly) {
     setResults = Array.from({ length: sets }, (_, index) => normalizeSetResult(
       null,
       index + 1,
-      { forcePending: true },
+      { forcePending: true, targetKind: target.kind },
     ));
   } else if (Array.isArray(source.setResults)) {
     setResults = Array.from({ length: sets }, (_, index) => normalizeSetResult(
       source.setResults[index],
       index + 1,
-      { completedAt: options.completedAt ?? null },
+      { completedAt: options.completedAt ?? null, targetKind: target.kind },
     ));
   } else {
     const completedSets = toBoundedInteger(source.completedSets, 0, 0, sets);
     const legacyResult = {
       weightKg: toWeightOrNull(source.actualWeightKg),
+      actualValue: toTargetValueOrNull(source.actualReps, target.kind),
       reps: toRepsOrNull(source.actualReps),
       rpe: toRpeOrNull(source.rpe),
     };
@@ -154,15 +193,48 @@ export function normalizeExercise(input, options = {}) {
         ? { ...legacyResult, status: 'completed' }
         : { status: 'pending' },
       index + 1,
-      { completedAt: options.completedAt ?? null },
+      { completedAt: options.completedAt ?? null, targetKind: target.kind },
     ));
   }
 
-  const aggregates = aggregateSetResults(setResults);
+  const aggregates = aggregateSetResults(setResults, target.kind);
+  const continuousSource = isRecord(source.continuousResult) ? source.continuousResult : {};
+  const continuousStatus = SET_RESULT_STATUSES.includes(continuousSource.status)
+    ? continuousSource.status
+    : 'pending';
+  const continuousResult = structure === 'continuous'
+    ? {
+      status: continuousStatus,
+      actualValue: continuousStatus === 'skipped'
+        ? null
+        : toTargetValueOrNull(continuousSource.actualValue, target.kind),
+      distanceMeters: continuousStatus === 'skipped'
+        ? null
+        : toTargetValueOrNull(
+          continuousSource.distanceMeters
+            ?? (target.kind === 'distance' ? continuousSource.actualValue : null),
+          'distance',
+        ),
+      activeDurationSeconds: continuousStatus === 'skipped'
+        ? null
+        : toTargetValueOrNull(continuousSource.activeDurationSeconds, 'duration'),
+      averagePaceSecondsPerKm: continuousStatus === 'skipped'
+        ? null
+        : toTargetValueOrNull(continuousSource.averagePaceSecondsPerKm, 'duration'),
+      completedAt: continuousStatus === 'completed'
+        ? toIsoTimestamp(continuousSource.completedAt, options.completedAt ?? null)
+        : null,
+    }
+    : null;
 
   return {
     id: toText(source.id) || makeId(options.idFactory, 'exercise'),
     name: toText(source.name, 'Упражнение') || 'Упражнение',
+    structure,
+    target,
+    legacyTargetText,
+    catalogExerciseId: toNullableId(source.catalogExerciseId),
+    customExerciseId: toNullableId(source.customExerciseId),
     sets,
     plannedReps,
     plannedWeightKg: toWeightOrNull(
@@ -171,6 +243,7 @@ export function normalizeExercise(input, options = {}) {
     restSeconds: normalizeRestSeconds(source.restSeconds, DEFAULT_REST_SECONDS),
     ...aggregates,
     setResults,
+    continuousResult,
   };
 }
 
@@ -196,6 +269,11 @@ export function normalizePlanSnapshot(input, options = {}) {
     exercises: ensureUniqueIds(exercises, 'exercise', options.idFactory).map((exercise) => ({
       id: exercise.id,
       name: exercise.name,
+      structure: exercise.structure,
+      target: { ...exercise.target },
+      legacyTargetText: exercise.legacyTargetText,
+      catalogExerciseId: exercise.catalogExerciseId,
+      customExerciseId: exercise.customExerciseId,
       sets: exercise.sets,
       plannedReps: exercise.plannedReps,
       plannedWeightKg: exercise.plannedWeightKg,
@@ -332,6 +410,65 @@ export function normalizeBodyWeightEntry(input, options = {}) {
   };
 }
 
+/** @param {unknown} input @param {{idFactory?: (prefix?: string) => string, now?: Date|number|string}} options */
+export function normalizeCustomExercise(input, options = {}) {
+  const source = isRecord(input) ? input : {};
+  const target = normalizeTarget(source.target);
+  const structure = normalizeExerciseStructure(source.structure, target);
+  const now = toIsoTimestamp(options.now, new Date().toISOString());
+  const createdAt = toIsoTimestamp(source.createdAt, now);
+  return {
+    id: toText(source.id) || makeId(options.idFactory, 'custom-exercise'),
+    name: toText(source.name, 'Упражнение') || 'Упражнение',
+    aliases: [...new Set(
+      (Array.isArray(source.aliases) ? source.aliases : [])
+        .map((alias) => toText(alias))
+        .filter(Boolean),
+    )].slice(0, 20),
+    category: toText(source.category, 'Другое') || 'Другое',
+    structure,
+    target,
+    sets: structure === 'continuous'
+      ? 1
+      : toBoundedInteger(source.sets, 3, 1, MAX_EXERCISE_SETS),
+    restSeconds: structure === 'continuous'
+      ? 0
+      : normalizeRestSeconds(source.restSeconds, DEFAULT_REST_SECONDS),
+    createdAt,
+    updatedAt: toIsoTimestamp(source.updatedAt, createdAt),
+  };
+}
+
+function normalizeActiveContinuousSession(input, workouts) {
+  if (!isRecord(input)) return null;
+  const workoutId = toNullableId(input.workoutId);
+  const exerciseId = toNullableId(input.exerciseId);
+  const workout = workouts.find((item) => item.id === workoutId && item.status === 'planned');
+  const exercise = workout?.exercises.find(
+    (item) => item.id === exerciseId && item.structure === 'continuous',
+  );
+  if (!workout || !exercise) return null;
+  const statuses = ['acquiring', 'active', 'paused', 'summary'];
+  const inputStatus = statuses.includes(input.status) ? input.status : 'paused';
+  // A persisted live watcher cannot survive reload. Resume only after a new
+  // direct user action and a fresh in-memory GPS baseline.
+  const status = ['active', 'acquiring'].includes(inputStatus) ? 'paused' : inputStatus;
+  const updatedAt = toIsoTimestamp(input.updatedAt, null);
+  return {
+    workoutId,
+    exerciseId,
+    status,
+    accumulatedMeters: Math.max(0, Math.round(Number(input.accumulatedMeters) || 0)),
+    activeDurationSeconds: Math.max(0, Math.round(Number(input.activeDurationSeconds) || 0)),
+    startedAt: toIsoTimestamp(input.startedAt, null),
+    activeSince: null,
+    pausedAt: status === 'paused'
+      ? toIsoTimestamp(input.pausedAt, updatedAt)
+      : null,
+    updatedAt,
+  };
+}
+
 /** @param {unknown} input */
 export function normalizeSettings(input) {
   if (!isRecord(input)) return {};
@@ -348,24 +485,26 @@ export function normalizeSettings(input) {
   };
 }
 
-/** @returns {import('./model.js').AppStateV2} */
+/** @returns {import('./model.js').AppStateV3} */
 export function createEmptyAppState() {
   return {
     schemaVersion: SCHEMA_VERSION,
     workouts: [],
     series: [],
     templates: [],
+    customExercises: [],
     bodyWeightEntries: [],
     settings: normalizeSettings(null),
     activeTimer: null,
+    activeContinuousSession: null,
   };
 }
 
 /**
- * Runtime-normalizes partially damaged V2 values without throwing.
+ * Runtime-normalizes partially damaged V1/V2/V3 values without throwing.
  * @param {unknown} input
  * @param {{idFactory?: (prefix?: string) => string, today?: string, now?: Date|number|string}} options
- * @returns {import('./model.js').AppStateV2}
+ * @returns {import('./model.js').AppStateV3}
  */
 export function normalizeAppState(input, options = {}) {
   if (!isRecord(input)) return createEmptyAppState();
@@ -391,6 +530,13 @@ export function normalizeAppState(input, options = {}) {
     'template',
     options.idFactory,
   );
+  const customExercises = ensureUniqueIds(
+    (Array.isArray(input.customExercises) ? input.customExercises : [])
+      .filter(isRecord)
+      .map((exercise) => normalizeCustomExercise(exercise, options)),
+    'custom-exercise',
+    options.idFactory,
+  );
 
   const bodyWeightByDate = new Map();
   for (const value of Array.isArray(input.bodyWeightEntries) ? input.bodyWeightEntries : []) {
@@ -403,9 +549,13 @@ export function normalizeAppState(input, options = {}) {
     workouts,
     series,
     templates,
+    customExercises,
     bodyWeightEntries: [...bodyWeightByDate.values()].sort((left, right) => left.date.localeCompare(right.date)),
     settings,
     activeTimer: normalizeActiveTimerForWorkouts(input.activeTimer, workouts),
+    activeContinuousSession: input.activeTimer
+      ? null
+      : normalizeActiveContinuousSession(input.activeContinuousSession, workouts),
   };
 }
 

@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from 'react';
-import { CalendarDays, Plus, Save, Trash2 } from 'lucide-react';
+import { CalendarDays, Save } from 'lucide-react';
 import { Modal } from '../../components/index.js';
 import {
   addCalendarDays,
@@ -10,6 +10,18 @@ import {
 } from '../../domain/dates.js';
 import { calculatePlanPoints } from '../../domain/points.js';
 import { normalizeExercise } from '../../domain/schema.js';
+import { createExerciseFromLibraryItem } from '../../domain/exerciseCatalog.js';
+import { resolveExerciseDefaults } from '../../domain/exerciseDefaults.js';
+import {
+  createAutomaticWorkoutTitle,
+  normalizeTarget,
+} from '../../domain/targets.js';
+import {
+  ExercisePicker,
+  ExerciseTargetEditor,
+  WorkoutPlanBuilder,
+} from './editor/index.js';
+import { getInitialEditorStep, validateExerciseDraft } from './editor/editorView.js';
 
 const WEEKDAYS = [
   { value: 1, label: 'Пн' },
@@ -36,9 +48,10 @@ const maxSeriesEnd = (date) => addCalendarDays(addCalendarYears(date, 1), -1);
 const newExercise = () => ({
   id: makeId(),
   name: '',
+  structure: 'sets',
+  target: { kind: 'reps', value: 10, unit: 'count' },
   sets: 3,
   plannedReps: '10',
-  plannedWeightKg: '',
   restSeconds: 90,
   completedSets: 0,
   actualWeightKg: '',
@@ -47,10 +60,11 @@ const newExercise = () => ({
 });
 
 function normalizeExerciseForForm(exercise) {
+  const normalized = normalizeExercise(exercise, { planningOnly: true });
   return {
     ...newExercise(),
-    ...exercise,
-    plannedWeightKg: toFormValue(exercise?.plannedWeightKg),
+    ...normalized,
+    target: normalizeTarget(normalized.target),
     actualWeightKg: toFormValue(exercise?.actualWeightKg),
     actualReps: toFormValue(exercise?.actualReps),
     rpe: toFormValue(exercise?.rpe),
@@ -79,7 +93,7 @@ function initialWorkoutForm(initialDate, workout, resultMode = false) {
     ? source.exercises.map((exercise) => resultMode
       ? normalizeResultExerciseForForm(exercise, source.completedAt ?? null)
       : normalizeExerciseForForm(exercise))
-    : (resultMode ? [] : [newExercise()]);
+    : [];
   return {
     templateName: '',
     title: source.title ?? '',
@@ -101,13 +115,19 @@ function initialTemplateForm(initialDate, template) {
 }
 
 function cleanPlanExercise(exercise) {
+  const target = normalizeTarget(exercise.target);
   return {
     id: exercise.id,
     name: exercise.name.trim(),
-    sets: Math.trunc(Number(exercise.sets)),
-    plannedReps: String(exercise.plannedReps).trim(),
-    plannedWeightKg: optionalNumber(exercise.plannedWeightKg),
-    restSeconds: Math.trunc(Number(exercise.restSeconds)),
+    structure: exercise.structure === 'continuous' ? 'continuous' : 'sets',
+    target,
+    sets: exercise.structure === 'continuous' ? 1 : Math.trunc(Number(exercise.sets)),
+    restSeconds: exercise.structure === 'continuous'
+      ? 0
+      : Math.trunc(Number(exercise.restSeconds)),
+    catalogExerciseId: exercise.catalogExerciseId ?? null,
+    customExerciseId: exercise.customExerciseId ?? null,
+    legacyTargetText: exercise.legacyTargetText ?? null,
   };
 }
 
@@ -118,6 +138,9 @@ function cleanSetResult(setResult) {
     status: setResult.status,
     weightKg: completed ? optionalNumber(setResult.weightKg) : null,
     reps: completed ? optionalNumber(setResult.reps) : null,
+    actualValue: completed
+      ? optionalNumber(setResult.actualValue ?? setResult.reps)
+      : null,
     rpe: completed ? optionalNumber(setResult.rpe) : null,
     completedAt: completed ? setResult.completedAt ?? null : null,
   };
@@ -152,14 +175,8 @@ function validatePlan(form, { includeDate, templateMode, repeat, weekdays, inter
   if (!form.exercises.length) return 'Добавь хотя бы одно упражнение.';
 
   for (const exercise of form.exercises) {
-    if (!exercise.name.trim()) return 'У каждого упражнения должно быть название.';
-    const sets = Number(exercise.sets);
-    if (!Number.isInteger(sets) || sets < 1 || sets > 20) return 'Количество подходов должно быть от 1 до 20.';
-    if (!String(exercise.plannedReps).trim()) return 'Укажи плановые повторы для каждого упражнения.';
-    const weight = optionalNumber(exercise.plannedWeightKg);
-    if (weight !== null && (!Number.isFinite(weight) || weight <= 0 || weight > 1000)) return 'Плановый вес должен быть от 0,5 до 1000 кг.';
-    const rest = Number(exercise.restSeconds);
-    if (!Number.isInteger(rest) || (rest !== 0 && (rest < 15 || rest > 900))) return 'Отдых должен быть 0 или от 15 до 900 секунд.';
+    const exerciseError = validateExerciseDraft(exercise);
+    if (exerciseError) return exerciseError;
   }
 
   if (repeat) {
@@ -197,6 +214,8 @@ function WorkoutEditorContent({
   initialDate,
   workout,
   template,
+  appState = {},
+  onCustomExerciseCreate,
   onClose,
   onSubmit,
 }) {
@@ -207,6 +226,18 @@ function WorkoutEditorContent({
   const [form, setForm] = useState(() => isTemplateMode
     ? initialTemplateForm(resolvedDate, template)
     : initialWorkoutForm(resolvedDate, workout, isResultMode));
+  const hasInitialPlan = Boolean((isTemplateMode ? template?.plan : workout)?.exercises?.length);
+  const [step, setStep] = useState(() => (
+    isResultMode || isRescheduleMode
+      ? 'focused'
+      : getInitialEditorStep(mode, hasInitialPlan)
+  ));
+  const [selectedExercise, setSelectedExercise] = useState(null);
+  const [editingExerciseId, setEditingExerciseId] = useState(null);
+  const [creatingCustom, setCreatingCustom] = useState(false);
+  const [titleWasEdited, setTitleWasEdited] = useState(() => Boolean(
+    (isTemplateMode ? template?.plan?.title : workout?.title)?.trim(),
+  ));
   const [repeat, setRepeat] = useState(false);
   const [weekdays, setWeekdays] = useState(() => [getIsoWeekday(workout?.plannedDate ?? resolvedDate)]);
   const [intervalWeeks, setIntervalWeeks] = useState(1);
@@ -219,16 +250,10 @@ function WorkoutEditorContent({
     [form.exercises],
   );
 
-  const update = (field, value) => {
+  const update = (field, value, options = {}) => {
     setError('');
+    if (field === 'title' && options.manual) setTitleWasEdited(true);
     setForm((current) => ({ ...current, [field]: value }));
-  };
-  const updateExercise = (id, field, value) => {
-    setError('');
-    setForm((current) => ({
-      ...current,
-      exercises: current.exercises.map((item) => item.id === id ? { ...item, [field]: value } : item),
-    }));
   };
   const updateSetResult = (exerciseId, setNumber, field, value) => {
     setError('');
@@ -238,7 +263,13 @@ function WorkoutEditorContent({
         ? {
           ...exercise,
           setResults: exercise.setResults.map((setResult) => (
-            setResult.setNumber === setNumber ? { ...setResult, [field]: value } : setResult
+            setResult.setNumber === setNumber
+              ? {
+                ...setResult,
+                [field]: value,
+                ...(field === 'reps' ? { actualValue: value } : {}),
+              }
+              : setResult
           )),
         }
         : exercise),
@@ -248,6 +279,87 @@ function WorkoutEditorContent({
     update('plannedDate', date);
     if (!repeat && isCalendarDate(date)) setWeekdays([getIsoWeekday(date)]);
     if (isCalendarDate(date)) setEndsOn(defaultSeriesEnd(date));
+  };
+
+  const beginExerciseSelection = () => {
+    setEditingExerciseId(null);
+    setCreatingCustom(false);
+    setSelectedExercise(null);
+    setStep('picker');
+  };
+  const selectLibraryExercise = (item) => {
+    const defaults = resolveExerciseDefaults(item, appState);
+    const exercise = createExerciseFromLibraryItem({ ...item, ...defaults });
+    setSelectedExercise({ ...exercise, ...defaults, id: exercise.id });
+    setCreatingCustom(false);
+    setStep('target');
+  };
+  const beginCustomExercise = () => {
+    const customId = `custom-${makeId()}`;
+    setEditingExerciseId(null);
+    setCreatingCustom(true);
+    setSelectedExercise({
+      ...newExercise(),
+      catalogExerciseId: null,
+      customExerciseId: customId,
+      pendingCustomId: customId,
+    });
+    setStep('target');
+  };
+  const editExercise = (exerciseId) => {
+    const exercise = form.exercises.find((item) => item.id === exerciseId);
+    if (!exercise) return;
+    setEditingExerciseId(exerciseId);
+    setCreatingCustom(false);
+    setSelectedExercise({ ...exercise, target: { ...exercise.target } });
+    setStep('target');
+  };
+  const confirmExercise = (exercise) => {
+    const cleaned = {
+      ...exercise,
+      catalogExerciseId: exercise.catalogExerciseId ?? null,
+      customExerciseId: exercise.customExerciseId ?? null,
+      legacyTargetText: null,
+    };
+    delete cleaned.pendingCustomId;
+    if (creatingCustom) {
+      onCustomExerciseCreate?.({
+        id: exercise.pendingCustomId ?? exercise.customExerciseId,
+        name: exercise.name,
+        aliases: [],
+        category: exercise.structure === 'continuous' ? 'cardio' : 'custom',
+        structure: exercise.structure,
+        target: exercise.target,
+        sets: exercise.sets,
+        restSeconds: exercise.restSeconds,
+      });
+    }
+    setForm((current) => {
+      const exercises = editingExerciseId
+        ? current.exercises.map((item) => item.id === editingExerciseId
+          ? { ...cleaned, id: editingExerciseId }
+          : item)
+        : [...current.exercises, cleaned];
+      return {
+        ...current,
+        exercises,
+        title: titleWasEdited ? current.title : createAutomaticWorkoutTitle(exercises),
+      };
+    });
+    setEditingExerciseId(null);
+    setCreatingCustom(false);
+    setSelectedExercise(null);
+    setStep('builder');
+  };
+  const removeExercise = (exerciseId) => {
+    setForm((current) => {
+      const exercises = current.exercises.filter((item) => item.id !== exerciseId);
+      return {
+        ...current,
+        exercises,
+        title: titleWasEdited ? current.title : createAutomaticWorkoutTitle(exercises),
+      };
+    });
   };
 
   const validate = () => {
@@ -269,6 +381,7 @@ function WorkoutEditorContent({
 
   const submit = (event) => {
     event.preventDefault();
+    if (step === 'picker' || step === 'target') return;
     const nextError = validate();
     if (nextError) {
       setError(nextError);
@@ -304,7 +417,7 @@ function WorkoutEditorContent({
     );
   };
 
-  const modalTitle = isTemplateMode
+  const baseModalTitle = isTemplateMode
     ? (template ? 'Редактировать шаблон' : 'Новый шаблон')
     : mode === 'create'
       ? 'Новая тренировка'
@@ -315,6 +428,11 @@ function WorkoutEditorContent({
           : isResultMode
             ? 'Исправить результат'
             : 'Редактировать тренировку';
+  const modalTitle = step === 'picker'
+    ? (form.exercises.length ? 'Добавить упражнение' : 'Выбери упражнение')
+    : step === 'target'
+      ? (creatingCustom ? 'Своё упражнение' : selectedExercise?.name ?? 'Настрой упражнение')
+      : baseModalTitle;
   const submitLabel = isTemplateMode
     ? 'Сохранить шаблон'
     : mode === 'create'
@@ -331,7 +449,7 @@ function WorkoutEditorContent({
     }
     return '';
   }, [form.exercises]);
-  const footer = (
+  const footer = step === 'picker' || step === 'target' ? null : (
     <>
       {!isResultMode && !isRescheduleMode && !isTemplateMode && <div className="points-preview">Можно получить <strong>+{pointsPreview}</strong></div>}
       <button type="submit" form="workout-editor-form" className="primary-button">
@@ -340,18 +458,65 @@ function WorkoutEditorContent({
       </button>
     </>
   );
+  const advancedContent = (
+    <>
+      {isTemplateMode && (
+        <label className="field full">
+          <span>Название шаблона</span>
+          <input ref={firstFieldRef} required maxLength="80" value={form.templateName} onChange={(event) => update('templateName', event.target.value)} placeholder="Например, День ног" />
+        </label>
+      )}
+      <div className="form-grid">
+        <label className="field"><span>Тип</span><select value={form.type} onChange={(event) => update('type', event.target.value)}><option>Силовая</option><option>Кардио</option><option>Мобильность</option><option>Другое</option></select></label>
+        <label className="field"><span>Интенсивность</span><select value={form.intensity} onChange={(event) => update('intensity', event.target.value)}><option>Лёгкая</option><option>Средняя</option><option>Высокая</option></select></label>
+        {isTemplateMode && <label className="field"><span>Время</span><input type="time" required value={form.time} onChange={(event) => update('time', event.target.value)} /></label>}
+      </div>
+      {mode === 'create' && (
+        <section className="recurrence-box">
+          <label className="toggle-row"><input type="checkbox" checked={repeat} onChange={(event) => setRepeat(event.target.checked)} /><span><strong>Повторять тренировку</strong><small>Создать конечную серию по дням недели</small></span></label>
+          {repeat && (
+            <div className="recurrence-controls">
+              <div className="weekday-picker" role="group" aria-label="Дни повторения">{WEEKDAYS.map((day) => <button type="button" key={day.value} className={weekdays.includes(day.value) ? 'active' : ''} aria-pressed={weekdays.includes(day.value)} onClick={() => setWeekdays((current) => current.includes(day.value) ? current.filter((item) => item !== day.value) : [...current, day.value])}>{day.label}</button>)}</div>
+              <label className="field"><span>Каждые</span><select value={intervalWeeks} onChange={(event) => setIntervalWeeks(Number(event.target.value))}><option value="1">1 неделю</option><option value="2">2 недели</option><option value="3">3 недели</option><option value="4">4 недели</option></select></label>
+              <label className="field"><span>До даты включительно</span><input type="date" value={endsOn} min={form.plannedDate} max={maxSeriesEnd(form.plannedDate)} onChange={(event) => setEndsOn(event.target.value)} /></label>
+            </div>
+          )}
+        </section>
+      )}
+    </>
+  );
 
   return (
     <Modal
       open
       title={modalTitle}
       eyebrow={isResultMode ? 'Фактические данные' : isTemplateMode ? 'Повторно используемый план' : 'План тренировки'}
+      description={step === 'picker'
+        ? 'Выбери готовое упражнение — подходы и цель подставятся автоматически.'
+        : step === 'target' ? 'Оставь рекомендуемые значения или настрой под себя.' : undefined}
       onClose={onClose}
       initialFocusRef={firstFieldRef}
       footer={footer}
+      className={step === 'picker' || step === 'target' ? 'guided-editor-modal' : 'workout-editor-modal'}
     >
       <form id="workout-editor-form" onSubmit={submit} noValidate>
-        {isResultMode ? (
+        {step === 'picker' ? (
+          <ExercisePicker
+            appState={appState}
+            inputRef={firstFieldRef}
+            onSelect={selectLibraryExercise}
+            onCreateCustom={beginCustomExercise}
+          />
+        ) : step === 'target' && selectedExercise ? (
+          <ExerciseTargetEditor
+            key={`${selectedExercise.id}:${creatingCustom ? 'custom' : 'existing'}`}
+            exercise={selectedExercise}
+            allowName={creatingCustom}
+            submitLabel={editingExerciseId ? 'Сохранить изменения' : 'Добавить в план'}
+            onBack={() => setStep(form.exercises.length ? 'builder' : 'picker')}
+            onConfirm={confirmExercise}
+          />
+        ) : isResultMode ? (
           <>
             <div className="result-editor-list">
               {form.exercises.map((exercise) => (
@@ -401,46 +566,17 @@ function WorkoutEditorContent({
             <label className="field"><span>Новое время</span><input type="time" required value={form.time} onChange={(event) => update('time', event.target.value)} /></label>
           </div>
         ) : (
-          <>
-            {isTemplateMode && <label className="field full"><span>Название шаблона</span><input ref={firstFieldRef} required maxLength="80" value={form.templateName} onChange={(event) => update('templateName', event.target.value)} placeholder="Например, День ног" /></label>}
-            <label className="field full"><span>Название тренировки</span><input ref={isTemplateMode ? undefined : firstFieldRef} required maxLength="80" value={form.title} onChange={(event) => update('title', event.target.value)} placeholder="Например, грудь и плечи" /></label>
-            <div className="form-grid">
-              <label className="field"><span>Тип</span><select value={form.type} onChange={(event) => update('type', event.target.value)}><option>Силовая</option><option>Кардио</option><option>Мобильность</option><option>Другое</option></select></label>
-              <label className="field"><span>Интенсивность</span><select value={form.intensity} onChange={(event) => update('intensity', event.target.value)}><option>Лёгкая</option><option>Средняя</option><option>Высокая</option></select></label>
-              {!isTemplateMode && <label className="field"><span>Дата</span><input type="date" required value={form.plannedDate} onChange={(event) => updatePlannedDate(event.target.value)} /></label>}
-              <label className="field"><span>Время</span><input type="time" required value={form.time} onChange={(event) => update('time', event.target.value)} /></label>
-            </div>
-
-            <section className="exercise-builder" aria-labelledby="exercise-builder-title">
-              <div className="builder-head">
-                <div><strong id="exercise-builder-title">Упражнения</strong><small>Отдых — 0 или 15–900 секунд</small></div>
-                <button type="button" className="text-button" onClick={() => update('exercises', [...form.exercises, newExercise()])}><Plus size={17} aria-hidden="true" /> Добавить</button>
-              </div>
-              {form.exercises.map((exercise, index) => (
-                <fieldset className="builder-row-v2" key={exercise.id}>
-                  <legend>{index + 1}. {exercise.name || 'Новое упражнение'}</legend>
-                  <label className="field exercise-name-field"><span>Упражнение</span><input value={exercise.name} maxLength="120" onChange={(event) => updateExercise(exercise.id, 'name', event.target.value)} placeholder="Отжимания" /></label>
-                  <label className="field"><span>Подходы</span><input type="number" min="1" max="20" step="1" value={exercise.sets} onChange={(event) => updateExercise(exercise.id, 'sets', event.target.value)} /></label>
-                  <label className="field"><span>Повторы</span><input value={exercise.plannedReps} maxLength="40" onChange={(event) => updateExercise(exercise.id, 'plannedReps', event.target.value)} placeholder="10–12" /></label>
-                  <label className="field"><span>Отдых, сек</span><input type="number" min="0" max="900" step="15" value={exercise.restSeconds} onChange={(event) => updateExercise(exercise.id, 'restSeconds', event.target.value)} /></label>
-                  <button type="button" className="icon-button danger" disabled={form.exercises.length === 1} onClick={() => update('exercises', form.exercises.filter((item) => item.id !== exercise.id))} aria-label={`Удалить упражнение ${exercise.name || index + 1}`}><Trash2 size={17} aria-hidden="true" /></button>
-                </fieldset>
-              ))}
-            </section>
-
-            {mode === 'create' && (
-              <section className="recurrence-box">
-                <label className="toggle-row"><input type="checkbox" checked={repeat} onChange={(event) => setRepeat(event.target.checked)} /><span><strong>Повторять тренировку</strong><small>Создать конечную серию по дням недели</small></span></label>
-                {repeat && (
-                  <div className="recurrence-controls">
-                    <div className="weekday-picker" role="group" aria-label="Дни повторения">{WEEKDAYS.map((day) => <button type="button" key={day.value} className={weekdays.includes(day.value) ? 'active' : ''} aria-pressed={weekdays.includes(day.value)} onClick={() => setWeekdays((current) => current.includes(day.value) ? current.filter((item) => item !== day.value) : [...current, day.value])}>{day.label}</button>)}</div>
-                    <label className="field"><span>Каждые</span><select value={intervalWeeks} onChange={(event) => setIntervalWeeks(Number(event.target.value))}><option value="1">1 неделю</option><option value="2">2 недели</option><option value="3">3 недели</option><option value="4">4 недели</option></select></label>
-                    <label className="field"><span>До даты включительно</span><input type="date" value={endsOn} min={form.plannedDate} max={maxSeriesEnd(form.plannedDate)} onChange={(event) => setEndsOn(event.target.value)} /></label>
-                  </div>
-                )}
-              </section>
-            )}
-          </>
+          <WorkoutPlanBuilder
+            form={form}
+            isTemplateMode={isTemplateMode}
+            onUpdate={update}
+            onDateChange={updatePlannedDate}
+            onAddExercise={beginExerciseSelection}
+            onEditExercise={editExercise}
+            onRemoveExercise={removeExercise}
+            advancedContent={advancedContent}
+            titleInputRef={isTemplateMode ? undefined : firstFieldRef}
+          />
         )}
         {error && <div className="form-error" role="alert">{error}</div>}
       </form>

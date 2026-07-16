@@ -14,6 +14,7 @@ function setResult(setNumber, status = 'pending', values = {}) {
     reps: null,
     rpe: null,
     completedAt: null,
+    actualValue: null,
     ...values,
   };
 }
@@ -26,6 +27,8 @@ function createExercise(overrides = {}) {
     plannedReps: '10',
     plannedWeightKg: null,
     restSeconds: 90,
+    structure: 'sets',
+    target: { kind: 'reps', value: 10, unit: 'count' },
     completedSets: 0,
     actualWeightKg: null,
     actualReps: null,
@@ -96,12 +99,12 @@ describe('ActiveWorkoutPage', () => {
 
   it('keeps a non-numeric plan as text and never invents repetitions', () => {
     const workout = createWorkout({
-      exercises: [createExercise({ plannedReps: '30 сек' })],
+      exercises: [createExercise({ plannedReps: 'до отказа', legacyTargetText: 'до отказа' })],
     });
 
     render(<ActiveWorkoutPage {...baseProps} workout={workout} onCompleteSet={() => {}} />);
 
-    expect(screen.getByText('30 сек')).toBeInTheDocument();
+    expect(screen.getByText('до отказа')).toBeInTheDocument();
     expect(screen.getByText('выполни по плану')).toBeInTheDocument();
     expect(screen.queryByText('повторений')).not.toBeInTheDocument();
   });
@@ -137,6 +140,98 @@ describe('ActiveWorkoutPage', () => {
     expect(onTimerPause).toHaveBeenCalledOnce();
     expect(onTimerAddThirty).toHaveBeenCalledOnce();
     expect(onContinueRest).toHaveBeenCalledWith('workout-1');
+  });
+
+  it('starts a duration set from a focused ready screen', async () => {
+    const user = userEvent.setup();
+    const onStartTimedSet = vi.fn();
+    const workout = createWorkout({
+      exercises: [createExercise({
+        name: 'Планка',
+        target: { kind: 'duration', value: 180, unit: 'seconds' },
+      })],
+    });
+
+    render(
+      <ActiveWorkoutPage
+        {...baseProps}
+        workout={workout}
+        onStartTimedSet={onStartTimedSet}
+      />,
+    );
+
+    expect(screen.getByText('03:00')).toBeInTheDocument();
+    expect(screen.getByText('Таймер завершит подход автоматически')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Начать подход' }));
+    expect(onStartTimedSet).toHaveBeenCalledWith({
+      workoutId: 'workout-1',
+      exerciseId: 'exercise-1',
+      setIndex: 0,
+    });
+  });
+
+  it('shows a running work timer and lets the user finish it early', async () => {
+    const user = userEvent.setup();
+    const onTimerPause = vi.fn();
+    const onFinishTimedSet = vi.fn();
+    const workout = createWorkout({
+      exercises: [createExercise({
+        name: 'Планка',
+        target: { kind: 'duration', value: 180, unit: 'seconds' },
+      })],
+    });
+
+    render(
+      <ActiveWorkoutPage
+        {...baseProps}
+        workout={workout}
+        timerSnapshot={{
+          status: 'running',
+          phase: 'work',
+          remainingSeconds: 142,
+          initialSeconds: 180,
+          workoutId: 'workout-1',
+          exerciseId: 'exercise-1',
+          setIndex: 0,
+        }}
+        onTimerPause={onTimerPause}
+        onFinishTimedSet={onFinishTimedSet}
+      />,
+    );
+
+    expect(screen.getByText('02:22')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Пауза' }));
+    expect(onTimerPause).toHaveBeenCalledOnce();
+    await user.click(screen.getByRole('button', { name: 'Завершить раньше' }));
+    await user.click(screen.getByRole('button', { name: 'Завершить сейчас' }));
+    expect(onFinishTimedSet).toHaveBeenCalledOnce();
+  });
+
+  it('routes a continuous distance exercise to the GPS start screen', () => {
+    const workout = createWorkout({
+      exercises: [{
+        ...createExercise(),
+        id: 'run',
+        name: 'Утренний бег',
+        structure: 'continuous',
+        target: { kind: 'distance', value: 3000, unit: 'meters' },
+        sets: 1,
+        setResults: [],
+        continuousResult: {
+          status: 'pending',
+          actualValue: null,
+          distanceMeters: null,
+          activeDurationSeconds: null,
+          averagePaceSecondsPerKm: null,
+          completedAt: null,
+        },
+      }],
+    });
+
+    render(<ActiveWorkoutPage {...baseProps} workout={workout} />);
+    expect(screen.getByRole('heading', { name: 'Утренний бег' })).toBeInTheDocument();
+    expect(screen.getByText('Цель: 3 км')).toBeInTheDocument();
+    expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuemax', '1');
   });
 
   it('returns from rest to the first pending set and moves focus', async () => {
@@ -211,6 +306,87 @@ describe('ActiveWorkoutPage', () => {
       patch: { reps: 12 },
     });
     expect(screen.getByRole('heading', { name: 'Тренировка собрана' })).toBeInTheDocument();
+  });
+
+  it('corrects actual duration in seconds without showing repetition fields', async () => {
+    const user = userEvent.setup();
+    const resolvedWorkout = createWorkout({
+      exercises: [createExercise({
+        name: 'Планка',
+        target: { kind: 'duration', value: 180, unit: 'seconds' },
+        completedSets: 2,
+        setResults: [
+          setResult(1, 'completed', { actualValue: 175 }),
+          setResult(2, 'completed', { actualValue: 180 }),
+        ],
+      })],
+    });
+    const onUpdateSet = vi.fn();
+
+    render(
+      <ActiveWorkoutPage
+        {...baseProps}
+        workout={resolvedWorkout}
+        onUpdateSet={onUpdateSet}
+        onCompleteWorkout={() => {}}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Исправить результаты' }));
+    const firstDuration = screen.getByRole('spinbutton', { name: 'Время, секунд: Планка, подход 1' });
+    fireEvent.change(firstDuration, { target: { value: '160' } });
+    await user.click(screen.getByRole('button', { name: 'Сохранить изменения' }));
+    expect(onUpdateSet).toHaveBeenCalledWith({
+      workoutId: 'workout-1',
+      exerciseId: 'exercise-1',
+      setIndex: 0,
+      patch: { actualValue: 160 },
+    });
+  });
+
+  it('corrects a completed continuous result in the final review', async () => {
+    const user = userEvent.setup();
+    const onUpdateContinuous = vi.fn();
+    const resolvedWorkout = createWorkout({
+      exercises: [{
+        ...createExercise(),
+        id: 'run',
+        name: 'Бег',
+        structure: 'continuous',
+        target: { kind: 'distance', value: 3000, unit: 'meters' },
+        sets: 1,
+        setResults: [],
+        continuousResult: {
+          status: 'completed',
+          actualValue: 3100,
+          distanceMeters: 3100,
+          activeDurationSeconds: 900,
+          averagePaceSecondsPerKm: 290,
+          completedAt: '2026-07-14T10:15:00.000Z',
+        },
+      }],
+    });
+
+    render(
+      <ActiveWorkoutPage
+        {...baseProps}
+        workout={resolvedWorkout}
+        onUpdateSet={() => {}}
+        onUpdateContinuous={onUpdateContinuous}
+        onCompleteWorkout={() => {}}
+      />,
+    );
+
+    expect(screen.getByText('3,1 км')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Исправить результаты' }));
+    fireEvent.change(screen.getByLabelText('Дистанция, м: Бег'), { target: { value: '3200' } });
+    await user.click(screen.getByRole('button', { name: 'Сохранить изменения' }));
+    expect(onUpdateContinuous).toHaveBeenCalledWith({
+      workoutId: 'workout-1',
+      exerciseId: 'run',
+      distanceMeters: 3200,
+      activeDurationSeconds: 900,
+    });
   });
 
   it('updates notes and requires explicit confirmation on the summary', async () => {

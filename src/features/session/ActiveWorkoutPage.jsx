@@ -2,11 +2,13 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, Dumbbell, LockKeyhole, ShieldOff, Timer } from 'lucide-react';
 import { pluralizeRu } from '../../domain/plural.js';
 import { calculateAwardedPoints } from '../../domain/points.js';
-import { calculateWorkoutVolume, findFirstPendingWorkoutSet } from '../../domain/workouts.js';
+import { calculateWorkoutVolume, findFirstPendingWorkoutUnit } from '../../domain/workouts.js';
+import { ContinuousWorkoutSession } from './ContinuousWorkoutSession.jsx';
 import { SessionRest } from './SessionRest.jsx';
 import { SessionResultsEditor } from './SessionResultsEditor.jsx';
 import { SessionSetFocus } from './SessionSetFocus.jsx';
 import { SessionSummary } from './SessionSummary.jsx';
+import { TimedSetSession } from './TimedSetSession.jsx';
 import {
   countWorkoutSets,
   formatSessionClock,
@@ -30,9 +32,22 @@ function ActiveWorkoutSession({
   workout,
   today,
   timerSnapshot = null,
+  activeContinuousSession = null,
   personalRecords = [],
   onStart,
   onCompleteSet,
+  onStartTimedSet,
+  onFinishTimedSet,
+  onStartContinuous,
+  onContinuousGpsReady,
+  onContinuousGpsDelta,
+  onContinuousTick,
+  onPauseContinuous,
+  onResumeContinuous,
+  onReviewContinuous,
+  onCompleteContinuous,
+  onUpdateContinuous,
+  onCancelContinuous,
   onUpdateSet,
   onCompleteWorkout,
   onUpdateNotes,
@@ -48,11 +63,13 @@ function ActiveWorkoutSession({
     && (!today || workout.plannedDate <= today),
   );
   const { status: wakeLockStatus } = useScreenWakeLock(canRun);
-  const pendingCursor = useMemo(() => findFirstPendingWorkoutSet(workout), [workout]);
+  const pendingCursor = useMemo(() => findFirstPendingWorkoutUnit(workout), [workout]);
   const [editingResults, setEditingResults] = useState(false);
   const [announcement, setAnnouncement] = useState('');
   const [now, setNow] = useState(() => Date.now());
   const focusHeadingRef = useRef(null);
+  const timedHeadingRef = useRef(null);
+  const continuousHeadingRef = useRef(null);
   const restHeadingRef = useRef(null);
   const summaryHeadingRef = useRef(null);
   const resultsHeadingRef = useRef(null);
@@ -65,6 +82,27 @@ function ActiveWorkoutSession({
     && timerSnapshot.status !== 'idle'
     && timerSnapshot.workoutId === workout.id,
   );
+  const workTimerForWorkout = timerForWorkout && timerSnapshot.phase === 'work';
+  const restTimerForWorkout = timerForWorkout && timerSnapshot.phase !== 'work';
+  const foreignWorkTimerActive = Boolean(
+    timerSnapshot
+    && timerSnapshot.phase === 'work'
+    && timerSnapshot.workoutId !== workout?.id,
+  );
+  const continuousSessionForWorkout = activeContinuousSession?.workoutId === workout?.id
+    ? activeContinuousSession
+    : null;
+  const foreignContinuousSessionActive = Boolean(
+    activeContinuousSession
+    && activeContinuousSession.workoutId !== workout?.id,
+  );
+  const pendingExercise = pendingCursor
+    ? workout?.exercises?.[pendingCursor.exerciseIndex]
+    : null;
+  const pendingTimedSet = pendingCursor?.kind === 'set'
+    && pendingExercise?.structure === 'sets'
+    && pendingExercise?.target?.kind === 'duration';
+  const pendingContinuousExercise = pendingCursor?.kind === 'continuous';
 
   useEffect(() => {
     if (!canRun || workout.startedAt || startedWorkoutIdRef.current === workout.id) return;
@@ -80,13 +118,19 @@ function ActiveWorkoutSession({
 
   const activeView = editingResults
     ? 'results'
-    : timerForWorkout
+    : continuousSessionForWorkout || pendingContinuousExercise
+      ? 'continuous'
+    : workTimerForWorkout || pendingTimedSet
+      ? 'timed'
+      : restTimerForWorkout
       ? 'rest'
       : pendingCursor ? 'set' : 'summary';
 
   useEffect(() => {
     const headings = {
       set: focusHeadingRef,
+      timed: timedHeadingRef,
+      continuous: continuousHeadingRef,
       rest: restHeadingRef,
       summary: summaryHeadingRef,
       results: resultsHeadingRef,
@@ -139,6 +183,11 @@ function ActiveWorkoutSession({
     setAnnouncement(`${selectedExercise.name}: подход ${pendingCursor.setIndex + 1} выполнен`);
   };
 
+  const finishTimedSet = () => {
+    onFinishTimedSet?.();
+    setAnnouncement(`${timerExercise?.name ?? selectedExercise?.name}: подход завершён`);
+  };
+
   const continueAfterRest = () => {
     onContinueRest?.(workout.id);
     setAnnouncement(nextPendingExercise
@@ -175,9 +224,53 @@ function ActiveWorkoutSession({
           workout={workout}
           headingRef={resultsHeadingRef}
           onUpdateSet={onUpdateSet}
+          onUpdateContinuous={onUpdateContinuous}
           onDone={() => setEditingResults(false)}
         />
-      ) : timerForWorkout ? (
+      ) : continuousSessionForWorkout || pendingContinuousExercise ? (
+        <ContinuousWorkoutSession
+          key={`continuous:${(continuousSessionForWorkout ? continuousSessionForWorkout.exerciseId : selectedExercise?.id) ?? 'missing'}`}
+          workoutId={workout.id}
+          exercise={continuousSessionForWorkout
+            ? workout.exercises.find((exercise) => exercise.id === continuousSessionForWorkout.exerciseId)
+            : selectedExercise}
+          exerciseIndex={continuousSessionForWorkout
+            ? workout.exercises.findIndex((exercise) => exercise.id === continuousSessionForWorkout.exerciseId)
+            : pendingCursor.exerciseIndex}
+          exerciseCount={workout.exercises.length}
+          session={continuousSessionForWorkout}
+          headingRef={continuousHeadingRef}
+          onStart={onStartContinuous}
+          onGpsReady={onContinuousGpsReady}
+          onGpsDelta={onContinuousGpsDelta}
+          onTick={onContinuousTick}
+          onPause={onPauseContinuous}
+          onResume={onResumeContinuous}
+          onReview={onReviewContinuous}
+          onComplete={onCompleteContinuous}
+          onCancel={onCancelContinuous}
+        />
+      ) : workTimerForWorkout || pendingTimedSet ? (
+        <TimedSetSession
+          key={`${(workTimerForWorkout ? timerExercise : selectedExercise)?.id}:${workTimerForWorkout ? timerSnapshot.setIndex : pendingCursor?.setIndex}`}
+          workoutId={workout.id}
+          exercise={workTimerForWorkout ? timerExercise : selectedExercise}
+          exerciseIndex={workTimerForWorkout
+            ? workout.exercises.findIndex((exercise) => exercise.id === timerExercise?.id)
+            : pendingCursor.exerciseIndex}
+          exerciseCount={workout.exercises.length}
+          setIndex={workTimerForWorkout ? timerSnapshot.setIndex : pendingCursor.setIndex}
+          timerSnapshot={workTimerForWorkout ? timerSnapshot : null}
+          headingRef={timedHeadingRef}
+          onStart={onStartTimedSet}
+          onPause={onTimerPause}
+          onResume={onTimerResume}
+          onFinishEarly={finishTimedSet}
+          startBlockedMessage={foreignWorkTimerActive || foreignContinuousSessionActive
+            ? 'Сначала завершите активный подход в другой тренировке.'
+            : ''}
+        />
+      ) : restTimerForWorkout ? (
         <SessionRest
           exercise={timerExercise}
           nextExercise={nextPendingExercise}

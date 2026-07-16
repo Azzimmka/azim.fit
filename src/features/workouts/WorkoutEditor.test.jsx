@@ -20,8 +20,15 @@ describe('WorkoutEditor', () => {
       />,
     );
 
-    await user.type(screen.getByLabelText('Название тренировки'), 'День ног');
-    await user.type(screen.getByLabelText('Упражнение'), 'Приседания');
+    expect(screen.getByRole('heading', { name: 'Выбери упражнение' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /ПриседанияПодходы/ }));
+    await user.click(screen.getByRole('button', { name: 'Добавить в план' }));
+    expect(screen.getByText(/3 × 15 повторов/)).toBeInTheDocument();
+    await user.click(screen.getByText('Дополнительно'));
+    const title = screen.getByLabelText('Название тренировки');
+    expect(title).toHaveValue('Приседания');
+    await user.clear(title);
+    await user.type(title, 'День ног');
     expect(screen.queryByLabelText('Вес, кг')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Продолжительность, минут')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Напоминание')).not.toBeInTheDocument();
@@ -35,10 +42,12 @@ describe('WorkoutEditor', () => {
       plannedDate: '2026-07-13',
       exercises: [{
         name: 'Приседания',
+        structure: 'sets',
+        target: { kind: 'reps', value: 15, unit: 'count' },
         sets: 3,
-        plannedReps: '10',
-        plannedWeightKg: null,
         restSeconds: 90,
+        catalogExerciseId: 'squats',
+        customExerciseId: null,
       }],
     });
     expect(payload).not.toHaveProperty('duration');
@@ -46,6 +55,7 @@ describe('WorkoutEditor', () => {
     expect(payload).not.toHaveProperty('planNotes');
     expect(payload).not.toHaveProperty('reminder');
     expect(payload.exercises[0]).not.toHaveProperty('completedSets');
+    expect(payload.exercises[0]).not.toHaveProperty('plannedWeightKg');
     expect(recurrence).toBeNull();
   });
 
@@ -88,7 +98,23 @@ describe('WorkoutEditor', () => {
 
     expect(onSubmit).toHaveBeenCalledWith({
       name: 'Быстрый верх',
-      plan: template.plan,
+      plan: {
+        title: 'Верх тела',
+        type: 'Силовая',
+        time: '07:30',
+        intensity: 'Высокая',
+        exercises: [{
+          id: 'exercise-1',
+          name: 'Жим лёжа',
+          structure: 'sets',
+          target: { kind: 'reps', value: 8, unit: 'count' },
+          sets: 4,
+          restSeconds: 120,
+          catalogExerciseId: null,
+          customExerciseId: null,
+          legacyTargetText: null,
+        }],
+      },
     }, null);
   });
 
@@ -164,12 +190,13 @@ describe('WorkoutEditor', () => {
       exercises: [{
         id: 'exercise-1',
         setResults: [
-          { setNumber: 1, status: 'completed', weightKg: 87.5, reps: 8, rpe: null, completedAt: '2026-07-12T16:10:00.000Z' },
-          { setNumber: 2, status: 'completed', weightKg: 85, reps: 6, rpe: 9, completedAt: '2026-07-12T16:15:00.000Z' },
-          { setNumber: 3, status: 'completed', weightKg: 80, reps: null, rpe: null, completedAt: null },
+          { setNumber: 1, status: 'completed', weightKg: 87.5, reps: 8, actualValue: 8, rpe: null, completedAt: '2026-07-12T16:10:00.000Z' },
+          { setNumber: 2, status: 'completed', weightKg: 85, reps: 6, actualValue: 6, rpe: 9, completedAt: '2026-07-12T16:15:00.000Z' },
+          { setNumber: 3, status: 'completed', weightKg: 80, reps: null, actualValue: null, rpe: null, completedAt: null },
         ],
       }],
     });
+    expect(payload.exercises[0].setResults.map((item) => item.actualValue)).toEqual([8, 6, null]);
     expect(payload).not.toHaveProperty('title');
     expect(payload).not.toHaveProperty('plannedDate');
   });
@@ -211,9 +238,9 @@ describe('WorkoutEditor', () => {
     await user.click(screen.getByRole('button', { name: 'Сохранить' }));
 
     expect(onSubmit.mock.calls[0][0].exercises[0].setResults).toEqual([
-      { setNumber: 1, status: 'completed', weightKg: 70, reps: 10, rpe: 8, completedAt: workout.completedAt },
-      { setNumber: 2, status: 'completed', weightKg: 70, reps: 10, rpe: 8, completedAt: workout.completedAt },
-      { setNumber: 3, status: 'pending', weightKg: null, reps: null, rpe: null, completedAt: null },
+      { setNumber: 1, status: 'completed', weightKg: 70, reps: 10, actualValue: 10, rpe: 8, completedAt: workout.completedAt },
+      { setNumber: 2, status: 'completed', weightKg: 70, reps: 10, actualValue: 10, rpe: 8, completedAt: workout.completedAt },
+      { setNumber: 3, status: 'pending', weightKg: null, reps: null, actualValue: null, rpe: null, completedAt: null },
     ]);
   });
 });

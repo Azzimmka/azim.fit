@@ -1,5 +1,16 @@
 import { isCalendarDate } from '../domain/dates.js';
 import {
+  acceptContinuousDelta,
+  activateContinuousSession,
+  buildContinuousResult,
+  createContinuousSession,
+  pauseContinuousSession,
+  resumeContinuousSession,
+  reviewContinuousSession,
+  tickContinuousSession,
+} from '../domain/continuousSession.js';
+import { SCHEMA_VERSION } from '../domain/model.js';
+import {
   deleteSeriesAndFollowing,
   excludeSeriesOccurrence,
   materializeSeries,
@@ -8,6 +19,7 @@ import {
 import {
   normalizeAppState,
   normalizeBodyWeightEntry,
+  normalizeCustomExercise,
   normalizeSettings,
   normalizeSeries,
   normalizeTemplate,
@@ -16,13 +28,16 @@ import {
 import { updateTemplate } from '../domain/templates.js';
 import {
   addRestTimerSeconds,
+  getTimerElapsedSeconds,
   normalizeActiveTimerForWorkouts,
   pauseRestTimer,
   resumeRestTimer,
   startRestTimer,
+  startWorkTimer,
 } from '../domain/timer.js';
 import {
   applyTemplate,
+  completeContinuousExercise,
   completeWorkoutSet,
   completeNextWorkoutSet,
   completeWorkout,
@@ -36,6 +51,7 @@ import {
   startWorkoutSession,
   toggleWorkoutSet,
   updateWorkoutSetResult,
+  updateContinuousExerciseResult,
   updateWorkoutResultDraft,
   updatePlannedWorkout,
 } from '../domain/workouts.js';
@@ -63,6 +79,9 @@ export const ActionTypes = Object.freeze({
   TEMPLATE_UPDATE: 'template/update',
   TEMPLATE_DELETE: 'template/delete',
   TEMPLATE_APPLY: 'template/apply',
+  CUSTOM_EXERCISE_ADD: 'custom-exercise/add',
+  CUSTOM_EXERCISE_UPDATE: 'custom-exercise/update',
+  CUSTOM_EXERCISE_DELETE: 'custom-exercise/delete',
   BODY_WEIGHT_UPSERT: 'body-weight/upsert',
   BODY_WEIGHT_DELETE: 'body-weight/delete',
   SETTINGS_UPDATE: 'settings/update',
@@ -73,6 +92,18 @@ export const ActionTypes = Object.freeze({
   WORKOUT_UPDATE_SET: 'workout/session-update-set',
   WORKOUT_SESSION_COMPLETE_SET: 'workout/session-complete-set',
   WORKOUT_COMPLETE_SET: 'workout/session-complete-set',
+  WORKOUT_SESSION_START_TIMED_SET: 'workout/session-start-timed-set',
+  WORKOUT_SESSION_FINISH_TIMED_SET: 'workout/session-finish-timed-set',
+  WORKOUT_SESSION_START_CONTINUOUS: 'workout/session-start-continuous',
+  WORKOUT_SESSION_CONTINUOUS_GPS_READY: 'workout/session-continuous-gps-ready',
+  WORKOUT_SESSION_CONTINUOUS_ACCEPT_DELTA: 'workout/session-continuous-accept-delta',
+  WORKOUT_SESSION_CONTINUOUS_TICK: 'workout/session-continuous-tick',
+  WORKOUT_SESSION_PAUSE_CONTINUOUS: 'workout/session-pause-continuous',
+  WORKOUT_SESSION_RESUME_CONTINUOUS: 'workout/session-resume-continuous',
+  WORKOUT_SESSION_REVIEW_CONTINUOUS: 'workout/session-review-continuous',
+  WORKOUT_SESSION_COMPLETE_CONTINUOUS: 'workout/session-complete-continuous',
+  WORKOUT_SESSION_UPDATE_CONTINUOUS: 'workout/session-update-continuous',
+  WORKOUT_SESSION_CANCEL_CONTINUOUS: 'workout/session-cancel-continuous',
   WORKOUT_SESSION_CONTINUE_REST: 'workout/session-continue-rest',
   WORKOUT_CONTINUE_AFTER_REST: 'workout/session-continue-rest',
   WORKOUT_SESSION_SKIP_EXERCISE: 'workout/session-skip-exercise',
@@ -102,10 +133,20 @@ function updateWorkoutById(state, id, updater) {
 }
 
 function withWorkouts(state, workouts) {
+  const activeContinuousSession = state.activeContinuousSession;
+  const sessionWorkout = activeContinuousSession
+    ? workouts.find((workout) => (
+      workout.id === activeContinuousSession.workoutId && workout.status === 'planned'
+    ))
+    : null;
+  const sessionExercise = sessionWorkout?.exercises.find((exercise) => (
+    exercise.id === activeContinuousSession.exerciseId && exercise.structure === 'continuous'
+  ));
   return {
     ...state,
     workouts,
     activeTimer: normalizeActiveTimerForWorkouts(state.activeTimer, workouts),
+    activeContinuousSession: sessionExercise ? activeContinuousSession : null,
   };
 }
 
@@ -119,14 +160,53 @@ function replaceSeries(state, seriesId, replacements, workouts = state.workouts)
   }, workouts);
 }
 
+function finishTimedSet(state, payload, { requireExpiry = false } = {}) {
+  const timer = normalizeActiveTimerForWorkouts(state.activeTimer, state.workouts);
+  if (!timer || timer.phase !== 'work') return state;
+  const elapsedSeconds = getTimerElapsedSeconds(timer, payload.now);
+  if (requireExpiry && elapsedSeconds < timer.initialSeconds) return state;
+  const measuredValue = Number.isInteger(Number(payload.actualValue))
+    ? Number(payload.actualValue)
+    : elapsedSeconds;
+  const actualValue = requireExpiry ? measuredValue : Math.max(1, measuredValue);
+  if (actualValue < 1 || actualValue > timer.initialSeconds) return state;
+
+  const target = state.workouts.find((workout) => workout.id === timer.workoutId);
+  const exercise = target?.exercises.find((item) => item.id === timer.exerciseId);
+  if (!target || !exercise) return state;
+  const nextWorkout = completeWorkoutSet(
+    target,
+    exercise.id,
+    timer.setIndex,
+    { actualValue, completedAt: payload.now },
+  );
+  if (nextWorkout === target) return state;
+
+  const workouts = state.workouts.map((workout) => (
+    workout.id === target.id ? nextWorkout : workout
+  ));
+  const nextPendingSet = findFirstPendingWorkoutSet(nextWorkout);
+  const activeTimer = nextPendingSet && Number(exercise.restSeconds) > 0
+    ? startRestTimer(exercise.restSeconds, {
+      now: payload.now,
+      workoutId: target.id,
+      exerciseId: exercise.id,
+    })
+    : null;
+  return {
+    ...withWorkouts(state, workouts),
+    activeTimer,
+  };
+}
+
 /**
  * Pure state transition function used by React.useReducer.
  * IDs/timestamps can be supplied in action payloads for deterministic tests.
- * @param {import('../domain/model.js').AppStateV2} currentState
+ * @param {import('../domain/model.js').AppStateV3} currentState
  * @param {{type: string, payload?: object}} action
  */
 export function appReducer(currentState, action) {
-  const state = currentState?.schemaVersion === 2
+  const state = currentState?.schemaVersion === SCHEMA_VERSION
     ? currentState
     : normalizeAppState(currentState);
   const payload = getPayload(action);
@@ -304,6 +384,42 @@ export function appReducer(currentState, action) {
       return withWorkouts(state, [...state.workouts, workout]);
     }
 
+    case ActionTypes.CUSTOM_EXERCISE_ADD: {
+      const exercise = normalizeCustomExercise(
+        payload.exercise ?? payload,
+        payload.options ?? { now: payload.now },
+      );
+      if (state.customExercises.some((item) => item.id === exercise.id)) return state;
+      return { ...state, customExercises: [...state.customExercises, exercise] };
+    }
+
+    case ActionTypes.CUSTOM_EXERCISE_UPDATE: {
+      const id = payload.id ?? payload.exerciseId;
+      const existing = state.customExercises.find((item) => item.id === id);
+      if (!existing) return state;
+      const exercise = normalizeCustomExercise({
+        ...existing,
+        ...(payload.patch ?? payload.changes ?? {}),
+        id: existing.id,
+        createdAt: existing.createdAt,
+        updatedAt: payload.now ?? payload.updatedAt ?? existing.updatedAt,
+      }, payload.options ?? { now: payload.now });
+      if (JSON.stringify(exercise) === JSON.stringify(existing)) return state;
+      return {
+        ...state,
+        customExercises: state.customExercises.map((item) => item.id === id ? exercise : item),
+      };
+    }
+
+    case ActionTypes.CUSTOM_EXERCISE_DELETE: {
+      const id = payload.id ?? payload.exerciseId;
+      if (!state.customExercises.some((item) => item.id === id)) return state;
+      return {
+        ...state,
+        customExercises: state.customExercises.filter((item) => item.id !== id),
+      };
+    }
+
     case ActionTypes.BODY_WEIGHT_UPSERT: {
       const entry = normalizeBodyWeightEntry(payload.entry ?? payload, { now: payload.now });
       if (!entry) return state;
@@ -378,6 +494,150 @@ export function appReducer(currentState, action) {
       };
     }
 
+    case ActionTypes.WORKOUT_SESSION_START_TIMED_SET: {
+      const activeTimerBlocksStart = state.activeTimer && state.activeTimer.phase !== 'rest';
+      if (activeTimerBlocksStart || state.activeContinuousSession) return state;
+      const workoutId = payload.workoutId ?? payload.id;
+      const target = state.workouts.find((workout) => workout.id === workoutId);
+      const exercise = target?.exercises.find((item) => item.id === payload.exerciseId);
+      const setIndex = Number(payload.setIndex ?? (Number(payload.setNumber) - 1));
+      if (
+        !target
+        || target.status !== 'planned'
+        || exercise?.structure !== 'sets'
+        || exercise?.target?.kind !== 'duration'
+        || !Number.isInteger(setIndex)
+        || exercise.setResults?.[setIndex]?.status !== 'pending'
+      ) return state;
+      const startedWorkout = startWorkoutSession(target, payload.now);
+      if (!startedWorkout.startedAt) return state;
+      const activeTimer = startWorkTimer(exercise.target.value, {
+        ...payload,
+        workoutId,
+        exerciseId: exercise.id,
+        setIndex,
+      });
+      if (!activeTimer) return state;
+      const workouts = startedWorkout === target
+        ? state.workouts
+        : state.workouts.map((workout) => workout.id === workoutId ? startedWorkout : workout);
+      return { ...withWorkouts(state, workouts), activeTimer };
+    }
+
+    case ActionTypes.WORKOUT_SESSION_FINISH_TIMED_SET:
+      return finishTimedSet(state, payload);
+
+    case ActionTypes.WORKOUT_SESSION_START_CONTINUOUS: {
+      if (state.activeTimer || state.activeContinuousSession) return state;
+      const workoutId = payload.workoutId ?? payload.id;
+      const target = state.workouts.find((workout) => workout.id === workoutId);
+      const exercise = target?.exercises.find((item) => item.id === payload.exerciseId);
+      if (
+        !target
+        || target.status !== 'planned'
+        || exercise?.structure !== 'continuous'
+        || exercise.continuousResult?.status !== 'pending'
+      ) return state;
+      const startedWorkout = startWorkoutSession(target, payload.now);
+      const activeContinuousSession = createContinuousSession(
+        workoutId,
+        exercise.id,
+        payload.now,
+      );
+      if (!startedWorkout.startedAt || !activeContinuousSession) return state;
+      const workouts = startedWorkout === target
+        ? state.workouts
+        : state.workouts.map((workout) => workout.id === workoutId ? startedWorkout : workout);
+      return { ...withWorkouts(state, workouts), activeContinuousSession };
+    }
+
+    case ActionTypes.WORKOUT_SESSION_CONTINUOUS_GPS_READY: {
+      const session = state.activeContinuousSession;
+      if (!session || (payload.workoutId && payload.workoutId !== session.workoutId)) return state;
+      const activeContinuousSession = activateContinuousSession(session, payload.now);
+      return activeContinuousSession === session ? state : { ...state, activeContinuousSession };
+    }
+
+    case ActionTypes.WORKOUT_SESSION_CONTINUOUS_ACCEPT_DELTA: {
+      const session = state.activeContinuousSession;
+      if (!session || (payload.workoutId && payload.workoutId !== session.workoutId)) return state;
+      const activeContinuousSession = acceptContinuousDelta(session, payload.deltaMeters, payload.now);
+      return activeContinuousSession === session ? state : { ...state, activeContinuousSession };
+    }
+
+    case ActionTypes.WORKOUT_SESSION_CONTINUOUS_TICK: {
+      const session = state.activeContinuousSession;
+      if (!session || (payload.workoutId && payload.workoutId !== session.workoutId)) return state;
+      const activeContinuousSession = tickContinuousSession(session, payload.now);
+      return activeContinuousSession === session ? state : { ...state, activeContinuousSession };
+    }
+
+    case ActionTypes.WORKOUT_SESSION_PAUSE_CONTINUOUS: {
+      const session = state.activeContinuousSession;
+      if (!session || (payload.workoutId && payload.workoutId !== session.workoutId)) return state;
+      const activeContinuousSession = pauseContinuousSession(session, payload.now);
+      return activeContinuousSession === session ? state : { ...state, activeContinuousSession };
+    }
+
+    case ActionTypes.WORKOUT_SESSION_RESUME_CONTINUOUS: {
+      const session = state.activeContinuousSession;
+      if (!session || (payload.workoutId && payload.workoutId !== session.workoutId)) return state;
+      const activeContinuousSession = resumeContinuousSession(session, payload.now);
+      return activeContinuousSession === session ? state : { ...state, activeContinuousSession };
+    }
+
+    case ActionTypes.WORKOUT_SESSION_REVIEW_CONTINUOUS: {
+      const session = state.activeContinuousSession;
+      if (!session || (payload.workoutId && payload.workoutId !== session.workoutId)) return state;
+      const activeContinuousSession = reviewContinuousSession(session, payload.now);
+      return activeContinuousSession === session ? state : { ...state, activeContinuousSession };
+    }
+
+    case ActionTypes.WORKOUT_SESSION_COMPLETE_CONTINUOUS: {
+      const session = state.activeContinuousSession;
+      const workoutId = payload.workoutId ?? session?.workoutId;
+      const exerciseId = payload.exerciseId ?? session?.exerciseId;
+      const target = state.workouts.find((workout) => workout.id === workoutId);
+      const exercise = target?.exercises.find((item) => item.id === exerciseId);
+      if (!target || !exercise || (session && (
+        session.workoutId !== workoutId || session.exerciseId !== exerciseId
+      ))) return state;
+      const result = buildContinuousResult(exercise, session, payload, payload.now);
+      if (!result) return state;
+      const nextWorkout = completeContinuousExercise(target, exerciseId, result);
+      if (nextWorkout === target) return state;
+      const workouts = state.workouts.map((workout) => workout.id === workoutId ? nextWorkout : workout);
+      return { ...withWorkouts(state, workouts), activeContinuousSession: null };
+    }
+
+    case ActionTypes.WORKOUT_SESSION_UPDATE_CONTINUOUS: {
+      const workoutId = payload.workoutId ?? payload.id;
+      const target = state.workouts.find((workout) => workout.id === workoutId);
+      const exercise = target?.exercises.find((item) => item.id === payload.exerciseId);
+      if (!target || exercise?.structure !== 'continuous' || exercise.continuousResult?.status !== 'completed') return state;
+      const distanceMeters = Number(payload.distanceMeters ?? exercise.continuousResult.distanceMeters);
+      const activeDurationSeconds = Number(payload.activeDurationSeconds ?? exercise.continuousResult.activeDurationSeconds);
+      const actualValue = exercise.target.kind === 'distance' ? distanceMeters : activeDurationSeconds;
+      const averagePaceSecondsPerKm = distanceMeters > 0 && activeDurationSeconds > 0
+        ? Math.round(activeDurationSeconds / (distanceMeters / 1_000))
+        : null;
+      const nextWorkout = updateContinuousExerciseResult(target, exercise.id, {
+        actualValue,
+        distanceMeters: distanceMeters > 0 ? distanceMeters : null,
+        activeDurationSeconds: activeDurationSeconds > 0 ? activeDurationSeconds : null,
+        averagePaceSecondsPerKm,
+      });
+      if (nextWorkout === target) return state;
+      const workouts = state.workouts.map((workout) => workout.id === workoutId ? nextWorkout : workout);
+      return withWorkouts(state, workouts);
+    }
+
+    case ActionTypes.WORKOUT_SESSION_CANCEL_CONTINUOUS: {
+      const session = state.activeContinuousSession;
+      if (!session || (payload.workoutId && payload.workoutId !== session.workoutId)) return state;
+      return { ...state, activeContinuousSession: null };
+    }
+
     case ActionTypes.WORKOUT_SESSION_CONTINUE_REST: {
       const workoutId = payload.workoutId ?? payload.id;
       if (!state.activeTimer || state.activeTimer.workoutId !== workoutId) return state;
@@ -398,6 +658,10 @@ export function appReducer(currentState, action) {
       return {
         ...withWorkouts(state, workouts),
         activeTimer: timerMatchesExercise ? null : state.activeTimer,
+        activeContinuousSession: state.activeContinuousSession?.workoutId === workoutId
+          && state.activeContinuousSession?.exerciseId === payload.exerciseId
+          ? null
+          : state.activeContinuousSession,
       };
     }
 
@@ -450,7 +714,15 @@ export function appReducer(currentState, action) {
       return { ...state, activeTimer: null };
 
     case ActionTypes.TIMER_FINISH:
-      return state.activeTimer ? { ...state, activeTimer: null } : state;
+      if (!state.activeTimer) return state;
+      if (state.activeTimer.phase === 'work') {
+        return finishTimedSet(state, payload, { requireExpiry: true });
+      }
+      if (state.activeTimer.workoutId) {
+        const validTimer = normalizeActiveTimerForWorkouts(state.activeTimer, state.workouts);
+        return validTimer ? state : { ...state, activeTimer: null };
+      }
+      return { ...state, activeTimer: null };
 
     case ActionTypes.UNDO_DELETE:
       return restoreDeletionSnapshot(state, payload.snapshot ?? payload, {

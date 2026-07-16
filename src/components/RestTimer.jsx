@@ -51,6 +51,7 @@ function runPreparedTimerAction(action) {
  * @param {number} props.remainingSeconds
  * @param {'running' | 'paused' | 'expired'} [props.status]
  * @param {string} [props.label]
+ * @param {'rest'|'work'} [props.mode]
  * @param {() => void} [props.onPause]
  * @param {() => void} [props.onResume]
  * @param {() => void} [props.onAddThirty]
@@ -60,6 +61,7 @@ export function RestTimer({
   remainingSeconds,
   status = 'running',
   label = 'Таймер отдыха',
+  mode = 'rest',
   onPause,
   onResume,
   onAddThirty,
@@ -68,7 +70,9 @@ export function RestTimer({
   const seconds = normalizeSeconds(remainingSeconds);
   const paused = status === 'paused';
   const expired = status === 'expired' || seconds === 0;
-  const statusText = expired ? 'Отдых завершён' : paused ? 'На паузе' : 'Идёт отсчёт';
+  const statusText = expired
+    ? (mode === 'work' ? 'Подход завершён' : 'Отдых завершён')
+    : paused ? 'На паузе' : (mode === 'work' ? 'Подход идёт' : 'Идёт отсчёт');
 
   return (
     <section className={`rest-timer ${paused ? 'paused' : ''} ${expired ? 'expired' : ''}`} aria-label={label}>
@@ -95,9 +99,11 @@ export function RestTimer({
             <Pause size={17} aria-hidden="true" /> Пауза
           </button>
         ))}
-        <button type="button" className="secondary-button" onClick={() => runPreparedTimerAction(onAddThirty)} disabled={!onAddThirty} aria-label="Добавить 30 секунд">
-          <Plus size={17} aria-hidden="true" /> 30 сек
-        </button>
+        {mode === 'rest' && (
+          <button type="button" className="secondary-button" onClick={() => runPreparedTimerAction(onAddThirty)} disabled={!onAddThirty} aria-label="Добавить 30 секунд">
+            <Plus size={17} aria-hidden="true" /> 30 сек
+          </button>
+        )}
         <button type="button" className="icon-button danger" onClick={onCancel} disabled={!onCancel} aria-label="Отменить таймер">
           <X size={18} aria-hidden="true" />
         </button>

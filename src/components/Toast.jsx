@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react';
 import { AlertTriangle, Check, Info, X } from 'lucide-react';
 
 const ICONS = {
@@ -14,6 +15,7 @@ const ICONS = {
  * @param {() => void} [props.onUndo]
  * @param {string} [props.undoLabel]
  * @param {() => void} [props.onDismiss]
+ * @param {number | false | null} [props.autoDismissMs]
  */
 export function Toast({
   title,
@@ -22,12 +24,27 @@ export function Toast({
   onUndo,
   undoLabel = 'Отменить',
   onDismiss,
+  autoDismissMs = 3_000,
 }) {
-  if (!title && !message) return null;
-
   const normalizedVariant = ICONS[variant] ? variant : 'info';
   const Icon = ICONS[normalizedVariant];
   const isError = normalizedVariant === 'error';
+  const dismissRef = useRef(onDismiss);
+  const canDismiss = typeof onDismiss === 'function';
+
+  useEffect(() => {
+    dismissRef.current = onDismiss;
+  }, [onDismiss]);
+
+  useEffect(() => {
+    if (!canDismiss || autoDismissMs === false || autoDismissMs === null) return undefined;
+    const duration = Number(autoDismissMs);
+    if (!Number.isFinite(duration) || duration < 0) return undefined;
+    const timeoutId = window.setTimeout(() => dismissRef.current?.(), duration);
+    return () => window.clearTimeout(timeoutId);
+  }, [autoDismissMs, canDismiss, message, normalizedVariant, title]);
+
+  if (!title && !message) return null;
 
   return (
     <div

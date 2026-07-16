@@ -22,7 +22,7 @@ function isBlankOptionalValue(value) {
   return value === null || value === undefined || value === '';
 }
 
-function isValidSetValuePatch(result) {
+function isValidSetValuePatch(result, targetKind = 'reps') {
   if (hasOwn(result, 'weightKg') && !isBlankOptionalValue(result.weightKg)) {
     const weight = Number(result.weightKg);
     if (!Number.isFinite(weight) || weight < 0.5 || weight > 1_000) return false;
@@ -30,6 +30,11 @@ function isValidSetValuePatch(result) {
   if (hasOwn(result, 'reps') && !isBlankOptionalValue(result.reps)) {
     const reps = Number(result.reps);
     if (!Number.isInteger(reps) || reps < 1 || reps > 999) return false;
+  }
+  if (hasOwn(result, 'actualValue') && !isBlankOptionalValue(result.actualValue)) {
+    const actualValue = Number(result.actualValue);
+    const maximum = targetKind === 'distance' ? 1_000_000 : targetKind === 'duration' ? 86_400 : 999;
+    if (!Number.isInteger(actualValue) || actualValue < 1 || actualValue > maximum) return false;
   }
   if (hasOwn(result, 'rpe') && !isBlankOptionalValue(result.rpe)) {
     const rpe = Number(result.rpe);
@@ -61,7 +66,15 @@ function completedSetResults(exercise) {
  */
 function applyExerciseResultPatch(exercise, patch = {}) {
   if (Array.isArray(patch.setResults)) {
-    return normalizeExercise({ ...exercise, setResults: patch.setResults });
+    const setResults = patch.setResults.map((result, index) => {
+      const previous = exercise.setResults?.[index];
+      const changedLegacyReps = exercise.target?.kind === 'reps'
+        && hasOwn(result, 'reps')
+        && result.reps !== previous?.reps
+        && (!hasOwn(result, 'actualValue') || result.actualValue === previous?.actualValue);
+      return changedLegacyReps ? { ...result, actualValue: result.reps } : result;
+    });
+    return normalizeExercise({ ...exercise, setResults });
   }
 
   const hasAggregatePatch = ['completedSets', 'actualWeightKg', 'actualReps', 'rpe']
@@ -90,6 +103,7 @@ function applyExerciseResultPatch(exercise, patch = {}) {
       ...result,
       weightKg: hasOwn(patch, 'actualWeightKg') ? patch.actualWeightKg : result.weightKg,
       reps: hasOwn(patch, 'actualReps') ? patch.actualReps : result.reps,
+      actualValue: hasOwn(patch, 'actualReps') ? patch.actualReps : result.actualValue,
       rpe: hasOwn(patch, 'rpe') ? patch.rpe : result.rpe,
     }
     : result);
@@ -111,9 +125,44 @@ export function startWorkoutSession(workout, now = Date.now()) {
 export function findFirstPendingWorkoutSet(workout) {
   for (let exerciseIndex = 0; exerciseIndex < (workout?.exercises?.length ?? 0); exerciseIndex += 1) {
     const exercise = workout.exercises[exerciseIndex];
+    if (exercise.structure === 'continuous') continue;
     const setIndex = exercise.setResults.findIndex((result) => result.status === 'pending');
     if (setIndex >= 0) {
       return {
+        exerciseId: exercise.id,
+        exerciseIndex,
+        setIndex,
+        setNumber: setIndex + 1,
+      };
+    }
+  }
+  return null;
+}
+
+/**
+ * Finds the next user-visible progress unit. A continuous exercise is one
+ * unit, while a regular exercise exposes each set independently.
+ * @param {import('./model.js').Workout} workout
+ */
+export function findFirstPendingWorkoutUnit(workout) {
+  for (let exerciseIndex = 0; exerciseIndex < (workout?.exercises?.length ?? 0); exerciseIndex += 1) {
+    const exercise = workout.exercises[exerciseIndex];
+    if (exercise.structure === 'continuous') {
+      if (exercise.continuousResult?.status === 'pending') {
+        return {
+          kind: 'continuous',
+          exerciseId: exercise.id,
+          exerciseIndex,
+          setIndex: null,
+          setNumber: 1,
+        };
+      }
+      continue;
+    }
+    const setIndex = exercise.setResults.findIndex((result) => result.status === 'pending');
+    if (setIndex >= 0) {
+      return {
+        kind: 'set',
         exerciseId: exercise.id,
         exerciseIndex,
         setIndex,
@@ -175,13 +224,28 @@ export function getWorkoutSetDefaults(workout, exerciseId, setIndex, previousWor
  * @param {import('./model.js').Exercise} exercise
  */
 export function getPlannedBodyweightSetResult(exercise) {
+  const targetKind = exercise?.target?.kind === 'duration' ? 'duration' : 'reps';
+  const targetValue = Number(exercise?.target?.value);
+  const maximum = targetKind === 'duration' ? 86_400 : 999;
+  const canonicalValue = Number.isInteger(targetValue)
+    && targetValue >= 1
+    && targetValue <= maximum
+    ? targetValue
+    : null;
   const plannedRepsText = String(exercise?.plannedReps ?? '').trim();
-  const plannedReps = /^\d+$/.test(plannedRepsText) ? Number(plannedRepsText) : null;
+  const legacyReps = /^\d+$/.test(plannedRepsText) ? Number(plannedRepsText) : null;
+  const plannedValue = canonicalValue ?? (
+    targetKind === 'reps'
+    && Number.isInteger(legacyReps)
+    && legacyReps >= 1
+    && legacyReps <= 999
+      ? legacyReps
+      : null
+  );
   return {
     weightKg: null,
-    reps: Number.isInteger(plannedReps) && plannedReps >= 1 && plannedReps <= 999
-      ? plannedReps
-      : null,
+    reps: targetKind === 'reps' ? plannedValue : null,
+    actualValue: plannedValue,
     rpe: null,
   };
 }
@@ -314,7 +378,7 @@ export function toggleWorkoutSet(workout, exerciseId, index) {
   if (!Number.isInteger(numericIndex) || numericIndex < 0) return workout;
   let changed = false;
   const exercises = workout.exercises.map((exercise) => {
-    if (exercise.id !== exerciseId || numericIndex >= exercise.setResults.length) return exercise;
+    if (exercise.structure === 'continuous' || exercise.id !== exerciseId || numericIndex >= exercise.setResults.length) return exercise;
     const setResults = exercise.setResults.map((result, resultIndex) => resultIndex === numericIndex
       ? {
         ...result,
@@ -337,20 +401,24 @@ export function toggleWorkoutSet(workout, exerciseId, index) {
  */
 export function updateWorkoutSetResult(workout, exerciseId, setIndex, patch = {}) {
   if (workout?.status !== 'planned') return workout;
-  if (!isValidSetValuePatch(patch)) return workout;
   const numericIndex = Number(setIndex);
   if (!Number.isInteger(numericIndex) || numericIndex < 0) return workout;
 
   let changed = false;
   const exercises = workout.exercises.map((exercise) => {
-    if (exercise.id !== exerciseId || numericIndex >= exercise.setResults.length) return exercise;
+    if (exercise.structure === 'continuous' || exercise.id !== exerciseId || numericIndex >= exercise.setResults.length) return exercise;
+    if (!isValidSetValuePatch(patch, exercise.target?.kind)) return exercise;
     const setResults = exercise.setResults.map((result, index) => {
       if (index !== numericIndex) return result;
       changed = true;
+      const actualValue = hasOwn(patch, 'actualValue')
+        ? patch.actualValue
+        : hasOwn(patch, 'reps') ? patch.reps : result.actualValue;
       return {
         ...result,
         weightKg: hasOwn(patch, 'weightKg') ? patch.weightKg : result.weightKg,
-        reps: hasOwn(patch, 'reps') ? patch.reps : result.reps,
+        reps: exercise.target?.kind === 'reps' ? actualValue : null,
+        actualValue,
         rpe: hasOwn(patch, 'rpe') ? patch.rpe : result.rpe,
       };
     });
@@ -369,26 +437,86 @@ export function updateWorkoutSetResult(workout, exerciseId, setIndex, patch = {}
  */
 export function completeWorkoutSet(workout, exerciseId, setIndex, result = {}) {
   if (workout?.status !== 'planned') return workout;
-  if (!isValidSetValuePatch(result)) return workout;
   const numericIndex = Number(setIndex);
   if (!Number.isInteger(numericIndex) || numericIndex < 0) return workout;
 
   let changed = false;
   const exercises = workout.exercises.map((exercise) => {
-    if (exercise.id !== exerciseId || numericIndex >= exercise.setResults.length) return exercise;
+    if (exercise.structure === 'continuous' || exercise.id !== exerciseId || numericIndex >= exercise.setResults.length) return exercise;
+    if (!isValidSetValuePatch(result, exercise.target?.kind)) return exercise;
     if (exercise.setResults[numericIndex].status === 'completed') return exercise;
-    const setResults = exercise.setResults.map((setResult, index) => index === numericIndex
-      ? {
+    const setResults = exercise.setResults.map((setResult, index) => {
+      if (index !== numericIndex) return setResult;
+      const actualValue = hasOwn(result, 'actualValue')
+        ? result.actualValue
+        : hasOwn(result, 'reps') ? result.reps : setResult.actualValue;
+      return {
         ...setResult,
         status: 'completed',
         weightKg: hasOwn(result, 'weightKg') ? result.weightKg : setResult.weightKg,
-        reps: hasOwn(result, 'reps') ? result.reps : setResult.reps,
+        reps: exercise.target?.kind === 'reps' ? actualValue : null,
+        actualValue,
         rpe: hasOwn(result, 'rpe') ? result.rpe : setResult.rpe,
         completedAt: nowIso(result.completedAt),
-      }
-      : setResult);
+      };
+    });
     changed = true;
     return normalizeExercise({ ...exercise, setResults });
+  });
+  return changed ? { ...workout, exercises } : workout;
+}
+
+/** Completes the one progress unit of a distance/time continuous exercise. */
+export function completeContinuousExercise(workout, exerciseId, result = {}) {
+  if (workout?.status !== 'planned' || result?.status !== 'completed') return workout;
+  let changed = false;
+  const exercises = workout.exercises.map((exercise) => {
+    if (
+      exercise.id !== exerciseId
+      || exercise.structure !== 'continuous'
+      || exercise.continuousResult?.status !== 'pending'
+    ) return exercise;
+    const actualValue = Number(result.actualValue);
+    const maximum = exercise.target?.kind === 'distance' ? 1_000_000 : 86_400;
+    if (!Number.isInteger(actualValue) || actualValue < 1 || actualValue > maximum) return exercise;
+    changed = true;
+    return normalizeExercise({
+      ...exercise,
+      continuousResult: {
+        status: 'completed',
+        actualValue,
+        distanceMeters: result.distanceMeters,
+        activeDurationSeconds: result.activeDurationSeconds,
+        averagePaceSecondsPerKm: result.averagePaceSecondsPerKm,
+        completedAt: result.completedAt,
+      },
+    });
+  });
+  return changed ? { ...workout, exercises } : workout;
+}
+
+/** Corrects a completed continuous result without changing the plan. */
+export function updateContinuousExerciseResult(workout, exerciseId, result = {}) {
+  if (!['planned', 'completed'].includes(workout?.status)) return workout;
+  let changed = false;
+  const exercises = workout.exercises.map((exercise) => {
+    if (
+      exercise.id !== exerciseId
+      || exercise.structure !== 'continuous'
+      || exercise.continuousResult?.status !== 'completed'
+    ) return exercise;
+    const actualValue = Number(result.actualValue);
+    const maximum = exercise.target?.kind === 'distance' ? 1_000_000 : 86_400;
+    if (!Number.isInteger(actualValue) || actualValue < 1 || actualValue > maximum) return exercise;
+    changed = true;
+    return normalizeExercise({
+      ...exercise,
+      continuousResult: {
+        ...exercise.continuousResult,
+        ...result,
+        status: 'completed',
+      },
+    });
   });
   return changed ? { ...workout, exercises } : workout;
 }
@@ -403,6 +531,14 @@ export function skipRemainingExerciseSets(workout, exerciseId) {
   let changed = false;
   const exercises = workout.exercises.map((exercise) => {
     if (exercise.id !== exerciseId) return exercise;
+    if (exercise.structure === 'continuous') {
+      if (exercise.continuousResult?.status !== 'pending') return exercise;
+      changed = true;
+      return normalizeExercise({
+        ...exercise,
+        continuousResult: { status: 'skipped' },
+      });
+    }
     let exerciseChanged = false;
     const setResults = exercise.setResults.map((result) => {
       if (result.status !== 'pending') return result;
@@ -413,6 +549,7 @@ export function skipRemainingExerciseSets(workout, exerciseId) {
         status: 'skipped',
         weightKg: null,
         reps: null,
+        actualValue: null,
         rpe: null,
         completedAt: null,
       };
@@ -487,7 +624,9 @@ export function completeWorkout(workout, result = {}) {
   });
   if (
     result.requireResolvedSets === true
-    && exercises.some((exercise) => exercise.setResults.some((set) => set.status === 'pending'))
+    && exercises.some((exercise) => exercise.structure === 'continuous'
+      ? exercise.continuousResult?.status === 'pending'
+      : exercise.setResults.some((set) => set.status === 'pending'))
   ) {
     return workout;
   }

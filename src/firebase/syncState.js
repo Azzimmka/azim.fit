@@ -1,10 +1,12 @@
 import { createEmptyAppState, normalizeAppState } from '../domain/schema.js';
+import { SCHEMA_VERSION } from '../domain/model.js';
 
 const COLLECTION_CONFIG = Object.freeze({
   workouts: Object.freeze({ key: 'id' }),
   series: Object.freeze({ key: 'id' }),
   templates: Object.freeze({ key: 'id' }),
   bodyWeightEntries: Object.freeze({ key: 'date' }),
+  customExercises: Object.freeze({ key: 'id' }),
 });
 const DETERMINISTIC_DATE = '1970-01-01';
 const DETERMINISTIC_TIMESTAMP = '1970-01-01T00:00:00.000Z';
@@ -64,6 +66,7 @@ function stateMeta(state) {
     schemaVersion: state.schemaVersion,
     settings: state.settings,
     activeTimer: state.activeTimer,
+    activeContinuousSession: state.activeContinuousSession,
   };
 }
 
@@ -83,7 +86,7 @@ function mergeEntities(localItems, remoteItems, key) {
 }
 
 /**
- * True only when there is no user data beyond the canonical V2 defaults.
+ * True only when there is no user data beyond the canonical V3 defaults.
  * Damaged values are normalized deterministically before the check.
  */
 export function isAppStateEmpty(state) {
@@ -91,6 +94,7 @@ export function isAppStateEmpty(state) {
   const empty = createEmptyAppState();
   return Object.keys(COLLECTION_CONFIG).every((key) => normalized[key].length === 0)
     && normalized.activeTimer === null
+    && normalized.activeContinuousSession === null
     && valuesEqual(normalized.settings, empty.settings);
 }
 
@@ -107,7 +111,7 @@ export function mergeAppStates(localState, remoteState, options = {}) {
   if (options.remoteMetaExists === true) metaSource = remote;
 
   return normalizeForSync({
-    schemaVersion: 2,
+    schemaVersion: SCHEMA_VERSION,
     workouts: mergeEntities(local.workouts, remote.workouts, 'id'),
     series: mergeEntities(local.series, remote.series, 'id'),
     templates: mergeEntities(local.templates, remote.templates, 'id'),
@@ -116,8 +120,14 @@ export function mergeAppStates(localState, remoteState, options = {}) {
       remote.bodyWeightEntries,
       'date',
     ),
+    customExercises: mergeEntities(
+      local.customExercises,
+      remote.customExercises,
+      'id',
+    ),
     settings: metaSource.settings,
     activeTimer: metaSource.activeTimer,
+    activeContinuousSession: metaSource.activeContinuousSession,
   }, options, 'merged');
 }
 
@@ -167,20 +177,22 @@ export function diffAppStates(previousState, nextState, options = {}) {
 }
 
 /**
- * Reassembles the five Firestore sources into the canonical runtime model.
+ * Reassembles the Firestore sources into the canonical runtime model.
  * `bodyWeights` is accepted as the Firestore collection name alias.
  */
 export function assembleAppStateSnapshot(sources = {}, options = {}) {
   const meta = stripPrivateSyncFields(sources.meta ?? {});
   return normalizeForSync({
-    schemaVersion: meta.schemaVersion ?? 2,
+    schemaVersion: meta.schemaVersion ?? SCHEMA_VERSION,
     workouts: stripPrivateSyncFields(sources.workouts ?? []),
     series: stripPrivateSyncFields(sources.series ?? []),
     templates: stripPrivateSyncFields(sources.templates ?? []),
     bodyWeightEntries: stripPrivateSyncFields(
       sources.bodyWeightEntries ?? sources.bodyWeights ?? [],
     ),
+    customExercises: stripPrivateSyncFields(sources.customExercises ?? []),
     settings: meta.settings,
     activeTimer: meta.activeTimer,
+    activeContinuousSession: meta.activeContinuousSession,
   }, options, 'snapshot');
 }

@@ -1,4 +1,8 @@
 export * from './dates.js';
+export * from './continuousSession.js';
+export * from './exerciseCatalog.js';
+export * from './exerciseDefaults.js';
+export * from './gps.js';
 export * from './id.js';
 export * from './model.js';
 export * from './plural.js';
@@ -9,4 +13,5 @@ export * from './schema.js';
 export * from './selectors.js';
 export { cloneTemplatePlan, updateTemplate } from './templates.js';
 export * from './timer.js';
+export * from './targets.js';
 export * from './workouts.js';
